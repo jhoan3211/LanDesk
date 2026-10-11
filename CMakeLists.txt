@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.25)
+﻿cmake_minimum_required(VERSION 3.25)
 
 project(LanCast
     VERSION 0.1.0
@@ -13,7 +13,7 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
 option(LANCAST_BUILD_TESTS "Compilar las pruebas unitarias" ON)
 option(LANCAST_WARNINGS_AS_ERRORS "Tratar advertencias como errores" ON)
@@ -24,6 +24,7 @@ add_subdirectory(lancast-core)
 add_subdirectory(lancast-platform)
 add_subdirectory(lancast-host)
 add_subdirectory(lancast-client)
+add_subdirectory(lancast-app)
 
 if(LANCAST_BUILD_TESTS)
     enable_testing()

@@ -1,132 +1,125 @@
 # LanCast
 
-Escritorio remoto y streaming de pantalla **solo para LAN**, con conexión por IP, latencia mínima (objetivo: < 10 ms de extremo a extremo por cable) y transferencia de archivos entre PC y celular.
+Escritorio remoto y streaming de pantalla **para tu red local (LAN)**: ve y controla otro PC con latencia mínima, con audio, portapapeles y transferencia de archivos. Un único `LanCast.exe` portátil (sin instalador, sin DLL de terceros) que funciona a la vez como **host** (equipo compartido) y como **cliente** (equipo que se conecta).
 
-Implementado en **C++23** sobre Windows 10/11 (DXGI, Direct3D 11, Media Foundation, FFmpeg).
+## Instalación (en cada PC)
 
-> Estado: **fase 1 completada** (base del proyecto + inventario de hardware). Ver la [hoja de ruta](#hoja-de-ruta).
+1. Descarga **`LanCast.exe`** desde la página de *Releases* del repositorio: <https://github.com/jhoan3211/LanDesk/releases>.
+2. Crea una carpeta, por ejemplo `C:\LanCast`, y copia ahí `LanCast.exe`. No necesita instalación.
+3. Ábrelo con doble clic.
+   - Si aparece **"Windows protegió su PC"** (SmartScreen, porque el archivo no está firmado): *Más información* → *Ejecutar de todas formas*.
+   - Si aparece el aviso del **Firewall de Windows**: marca **Redes privadas** y pulsa *Permitir acceso*.
+     Si no apareció o lo cerraste, en LanCast ve a *Ajustes* → **Crear reglas del firewall (perfil Privado)**.
+4. Comprueba que la red esté como **Privada**: *Configuración* → *Red e Internet* → *Ethernet* → *Tipo de perfil de red: Privada*.
+5. (Opcional) *Ajustes* → **Iniciar con Windows** para que el equipo siempre acepte conexiones (arranca minimizado en la bandeja).
 
-## Requisitos
+Requisitos: Windows 10 (1809+) u 11 de 64 bits y una GPU con codificación/decodificación por hardware (NVIDIA, AMD o Intel) con el driver actualizado. Para HEVC en el equipo cliente, Windows necesita la extensión **"Extensiones de video HEVC"** de Microsoft Store; si no está, LanCast usa H.264 automáticamente.
 
-| Herramienta | Versión |
+## Primer uso: conectar un PC a otro
+
+En el **PC que vas a controlar** (host), por ejemplo `192.168.40.7`:
+
+1. Abre LanCast. En *Este equipo (host)* debe decir **"Esperando conexiones en: 192.168.40.7"**.
+
+En el **PC desde el que controlas** (cliente):
+
+1. Abre LanCast → *Conectar a un equipo*.
+2. El host aparece solo en **"Equipos encontrados en la red"**; pulsa *Conectar*. También puedes escribir la IP (`192.168.40.7`) en *Conexión manual por IP*.
+3. La primera vez el host muestra un **PIN de 6 dígitos** (en su ventana y en una notificación). Escríbelo en el cliente. Desde ese momento los dos equipos quedan **emparejados** y ya no se pide PIN.
+
+Mientras alguien está conectado, el host muestra un aviso rojo **"Sesión activa desde …"** con un botón **Desconectar**.
+
+## Atajos durante la sesión
+
+| Atajo | Acción |
 |---|---|
-| Windows | 10 (1809+) u 11, x64 |
-| Visual Studio 2022 Build Tools | 17.14 o superior, workload "Desarrollo de escritorio con C++" (MSVC v143, SDK de Windows 11, CMake) |
-| CMake | 3.25 o superior (viene incluido en las Build Tools) |
-| Git | cualquiera reciente |
+| `Ctrl+Alt+Shift+M` | Menú: configuración del stream en vivo, monitores, archivos, desconectar |
+| `Ctrl+Alt+Shift+S` | Estadísticas (FPS, bitrate, latencias por etapa, pérdidas, FEC) |
+| `Ctrl+Alt+Shift+F` | Pantalla completa |
+| `Ctrl+Alt+Shift+1…9` | Cambiar al monitor 1…9 del host (`0` = todos) |
+| `Ctrl+Alt+Shift+R` | Mouse relativo (para juegos) |
+| `Ctrl+Alt+Shift+V` | Modo solo ver |
+| `Ctrl+Alt+Shift+Q` | Desconectar |
 
-Instalación rápida con `winget`:
+Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventana de LanCast está activa. `Ctrl+Alt+Supr` no se puede capturar (lo reserva Windows).
 
-```powershell
-winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"
-```
+## Funciones
 
-## Compilación
+- **Configuración del stream** (antes y durante la sesión, sin reconectar): monitor (o todos), resolución (nativa, 720p, 1080p, 1440p, 4K o personalizada), FPS (30–240 o personalizado), códec (automático, H.264, HEVC, AV1), bitrate (automático o 5–1000 Mbps), CBR/VBR, escalado (ajustar, estirar, 1:1), V-Sync, audio y FEC (0–50 %). **Perfiles** con nombre ("Trabajo 1440p 4:4:4", "Juego 144 Hz", "Celular" y los tuyos).
+- **Multi-monitor**: lista de monitores del host con resolución, Hz y posición (incluidas coordenadas negativas); cambio en vivo.
+- **Control remoto**: mouse absoluto o relativo, rueda, teclado por scancodes, cursor dibujado localmente (sin latencia) y modo solo ver.
+- **Audio** del host (WASAPI loopback, PCM 48 kHz sin compresión: cero latencia de códec).
+- **Portapapeles** de texto bidireccional.
+- **Archivos**: arrastra archivos o carpetas a la ventana para enviarlos; desde el host, menú de la bandeja → *Enviar archivos al cliente*. Bloques de 4 MB, **reanudable**, verificado con SHA-256, con progreso, velocidad y tiempo restante. Nunca sobrescribe (guarda como `nombre (1).ext`) salvo que lo actives. Carpeta por defecto: `Descargas\LanCast`.
+- **Seguridad**: emparejamiento con PIN (PBKDF2) y después secreto compartido de 256 bits por equipo (TOFU, guardado con DPAPI); intercambio ECDH P-256; todo el tráfico (control, video, audio y archivos) cifrado con **AES-256-GCM**. El host solo acepta IP privadas (RFC1918) y admite lista blanca de IP. Bloqueo de 10 minutos tras 5 PIN incorrectos.
 
-Desde una consola en la raíz del repositorio (si `cmake` no está en el `PATH`, usa la *Developer PowerShell for VS 2022*):
+## Rendimiento
 
-```powershell
-cmake --preset vs2022            # configura (descarga GoogleTest la primera vez)
-cmake --build --preset release   # o --preset debug
-ctest --preset release           # ejecuta las pruebas
-```
+- Camino de video sin copias a CPU: captura DXGI Desktop Duplication → escalado y conversión a NV12 con el procesador de video D3D11 → codificador por hardware del driver (NVENC/AMF/QuickSync vía Media Foundation) → UDP con FEC Reed-Solomon → decodificador DXVA → swapchain *flip-model* con tearing.
+- Medido en loopback con una GPU integrada AMD (1080p60 HEVC): captura+codificación ~4 ms, red ~0,5 ms, decodificación ~0,4 ms, presentación ~0,6 ms.
+- FEC al 15 % recupera sin cortes un 1 % de pérdida aleatoria (prueba automatizada).
+- Cambio de resolución, FPS, códec o monitor en ~130 ms sin reconectar.
 
-Los ejecutables quedan en `build\lancast-host\Release\lancast-host.exe` y `build\lancast-client\Release\lancast-client.exe`.
+## Red recomendada
 
-## Uso (fase 1)
+Todos los PC conectados por cable al mismo switch y en la misma subred (por ejemplo `192.168.40.x`). Si usas un router Wi-Fi detrás del router principal, ponlo en modo **punto de acceso** (o usa un access point conectado al switch) para que los dispositivos inalámbricos queden en la misma red.
 
-```powershell
-lancast-host --list              # GPUs, monitores, codificadores y decodificadores
-lancast-host --list --verbose    # + LUIDs de los adaptadores y perfiles DXVA no reconocidos
-lancast-host --list --json       # salida en JSON
-lancast-client --list            # lo mismo, visto desde el cliente
-```
-
-Ejemplo de salida:
-
-```
-== Monitores ==
-  [1] LG ULTRAGEAR  (principal)  \\.\DISPLAY1
-      Modo actual: 2560x1440 @ 165.00 Hz   Nativa: 2560x1440
-      Posición: (0, 0)   Escala: 125% (120 DPI)   Rotación: 0°
-      Color: 10 bits   HDR: soportado (desactivado)   Conectado a: GPU 0 (AMD Radeon(TM) Graphics)
-  [Todos] Escritorio virtual: 2560x1440 en (0, 0)
-
-== Codificadores por hardware (host) ==
-  h264_amf     H.264  AMF        GPU 0 (AMD Radeon(TM) Graphics)  [MFT: AMDh264Encoder]  runtime amfrt64.dll: OK
-  hevc_amf     HEVC   AMF        GPU 0 (AMD Radeon(TM) Graphics)  [MFT: AMDh265Encoder]  runtime amfrt64.dll: OK
-```
-
-Qué detecta:
-
-- **GPUs**: ordenadas por preferencia de rendimiento (`IDXGIFactory6::EnumAdapterByGpuPreference`), con fabricante, VRAM y LUID.
-- **Monitores**: `EnumDisplayMonitors` + `DXGI_OUTPUT_DESC1` + `QueryDisplayConfig`. Nombre comercial, modo actual y nativo, Hz exactos (racional), posición en el escritorio virtual (incluidas **coordenadas negativas**), DPI y escala por monitor, rotación, bits de color y HDR. El proceso es **Per-Monitor DPI Aware v2** (manifiesto + API). Los monitores se numeran de izquierda a derecha: el número coincide con el atajo `Ctrl+Alt+Shift+N`.
-- **Codificadores**: MFT de hardware expuestos por el driver de cada GPU (`MFTEnum2` filtrado por LUID), traducidos al codificador de FFmpeg (`h264_nvenc`, `hevc_amf`, `av1_qsv`…), más la comprobación de la DLL de runtime (`nvEncodeAPI64.dll`, `amfrt64.dll`). La validación definitiva (abrir el codificador con entrada D3D11) llega en la fase 2.
-- **Decodificadores**: perfiles D3D11VA por GPU (H.264, HEVC Main/Main10/4:4:4, AV1) con la resolución máxima comprobada (1080p → 8K).
-- **Bitrate automático** de referencia (ver `lancast-core/src/bitrate.cpp`).
-
-## Estructura
-
-```
-CMakeLists.txt            Proyecto raíz (C++23, MSVC, /W4 /WX)
-CMakePresets.json         Presets vs2022 / debug / release
-cmake/                    Advertencias del compilador y manifiesto (DPI PMv2, UTF-8)
-lancast-core/             Tipos compartidos, bitrate automático, JSON, formato de reportes (sin dependencias de Windows)
-lancast-platform/         Capa Windows compartida por host y cliente: DXGI, D3D11, Media Foundation, DisplayConfig
-lancast-host/             Ejecutable del host (captura, codificación, servidor; hoy: --list)
-lancast-client/           Ejecutable del cliente (decodificación, presentación, entrada, UI; hoy: --list)
-lancast-web/              Cliente web estático para el celular (fase 8)
-tests/                    GoogleTest: core (unitarias) y platform (integración con el hardware real, etiqueta "hardware")
-```
-
-`lancast-platform` es un módulo extra respecto al plan original: host y cliente necesitan la misma enumeración de GPU/monitores, y así `lancast-core` sigue siendo portable (web/Android).
-
-## Dependencias
-
-| Fase | Dependencia | Versión | Uso / motivo |
-|---|---|---|---|
-| 1 | Windows SDK (DXGI, D3D11, Media Foundation, Shcore) | 10.0.22621+ | Enumeración de hardware; viene con las Build Tools |
-| 1 | GoogleTest | v1.18.0 | Pruebas (descargado con `FetchContent`) |
-| 2 | FFmpeg (build LGPL *shared* de BtbN) | n8.1.3 | `*_nvenc`, `*_amf`, `*_qsv` con `hwframes` D3D11 y decodificación `d3d11va` |
-| 2 | C++/WinRT | 3.0.260818.1 (incluido en el SDK) | `Windows.Graphics.Capture` |
-| 2 | spdlog | v1.17.0 | Logging |
-| 3 | Reed-Solomon propio (Cauchy sobre GF(2⁸)) | — | FEC sin dependencias y con control total de la latencia (diseño inspirado en nanors, MIT) |
-| 4 | Dear ImGui (backend D3D11 + Win32) | v1.92.9b | Interfaz de conexión y configuración (equivalente a egui) |
-| 4 | toml++ | v3.4.0 | Configuración y perfiles en `%APPDATA%\LanCast` |
-| 5 | libopus | v1.5.2 | Audio (WASAPI loopback, 48 kHz) |
-| 6 | OpenSSL (LTS) | 3.5.9 | TLS 1.3 para control y archivos (SChannel no ofrece TLS 1.3 en Windows 10) y AES-GCM para el stream |
-| 6 | DNS-SD nativo de Windows (`DnsServiceRegister`/`DnsServiceBrowse`) | Windows 10 1809+ | mDNS `_lancast._udp.local` sin dependencias |
-| 7 | BLAKE3 (implementación C oficial) | 1.8.7 | Verificación de archivos |
-| 8 | cpp-httplib | v0.60.1 | Servidor HTTPS del cliente web |
-| 8 | libdatachannel | v0.24.6 | WebRTC (H.264) hacia el navegador del celular |
-| 9 | WiX Toolset | v7.0.0 | Instalador MSI |
-
-Las dependencias de fases futuras se fijarán con `FetchContent` (o binarios verificados) en la fase en la que se integren.
-
-## Decisiones técnicas (criterio: menor latencia)
-
-- **C++23 + MSVC**: acceso directo a D3D11/DXGI/FFmpeg sin capas de bindings; `std::expected` para errores sin excepciones en el camino caliente.
-- **Detección de codificadores por MFT de hardware**: no necesita FFmpeg ni crear un dispositivo de codificación, es instantánea y refleja lo que el driver realmente expone por GPU.
-- **Serialización binaria propia** (structs little-endian con versión) en lugar de un formato genérico: cero asignaciones y tamaño mínimo por paquete.
-- **UDP con Winsock directo** (posible RIO más adelante): menos copias y syscalls que una capa asíncrona genérica.
+Puertos (configurables en *Ajustes*): TCP **47984** (control), TCP **47985** (archivos), UDP **47998** (video y audio), UDP **47999** (descubrimiento).
 
 ## Solución de problemas
 
-- **`cmake` no se reconoce**: abre la *Developer PowerShell for VS 2022* o añade al `PATH` `C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin`.
-- **No aparece ningún codificador**: actualiza el driver de la GPU. En portátiles híbridos el monitor interno suele estar conectado a la iGPU; LanCast lo indica en "Conectado a".
-- **Aviso "falta nvEncodeAPI64.dll / amfrt64.dll"**: el driver está incompleto; reinstálalo (instalación limpia).
-- **HDR "soportado (desactivado)"**: actívalo en Configuración → Pantalla → Usar HDR si quieres transmitir 10 bits HDR.
-- **Las pruebas de plataforma fallan en una sesión sin pantalla** (RDP minimizado, servicio): se ejecutan contra el hardware real; usa `ctest --preset release -LE hardware` para excluirlas.
+- **El cliente no encuentra el host**: escribe la IP a mano. Comprueba que el host diga "Esperando conexiones" y que la red sea *Privada*. Pulsa *Crear reglas del firewall* en el host. Si tienes un antivirus con firewall propio (Kaspersky, ESET, etc.), permite `LanCast.exe` en él.
+- **"No se pudo conectar"**: haz ping a la IP del host. Si el ping funciona, casi siempre es el firewall del host.
+- **Pantalla negra o "Esperando video"**: actualiza el driver de la GPU del host. Revisa *Diagnóstico* en ambos equipos (codificadores en el host y decodificadores en el cliente).
+- **Volver a pedir PIN**: en el host, *Este equipo (host)* → *Equipos emparejados* → *Olvidar*.
+- **Registro**: *Ajustes* → *Registro*, o el archivo `%APPDATA%\LanCast\lancast.log`.
 
-## Hoja de ruta
+## Línea de comandos
 
-1. ✅ **Base**: estructura, enumeración de monitores y GPU, detección de codificadores/decodificadores, `lancast-host --list`.
-2. Captura (WGC + fallback DXGI Desktop Duplication) + escalado/conversión en GPU + codificación a archivo `.h265`/`.ivf`.
-3. Red UDP con FEC, cliente con D3D11VA y swapchain flip-model, conexión manual por IP, overlay de estadísticas.
-4. Interfaz de configuración, perfiles, renegociación en vivo, multi-monitor.
-5. Entrada, audio y portapapeles.
-6. Seguridad: emparejamiento por PIN, TLS 1.3, cifrado del stream, mDNS.
-7. Transferencia de archivos.
-8. Cliente web para celular (WebRTC + archivos).
-9. Empaquetado: MSI, servicio de Windows, bandeja del sistema.
-10. *(Opcional)* App Android para compartir la pantalla del celular.
+```
+LanCast.exe --list [--json] [--verbose]   Inventario de GPU, monitores y códecs
+LanCast.exe --connect 192.168.40.7        Conectar al iniciar
+LanCast.exe --minimized                   Iniciar oculto en la bandeja
+LanCast.exe --no-host                     Solo cliente (segunda instancia en el mismo PC)
+```
+
+La variable de entorno `LANCAST_DATA_DIR` cambia la carpeta de configuración (útil para pruebas).
+
+## Compilar desde el código
+
+Requisitos: Visual Studio 2022 Build Tools (C++ y CMake). GoogleTest y Dear ImGui se descargan solos en la configuración.
+
+```powershell
+cmake --preset vs2022
+cmake --build --preset release
+ctest --preset release
+```
+
+El ejecutable queda en `build\lancast-app\Release\LanCast.exe`.
+
+### Estructura
+
+```
+lancast-core/       Protocolo, FEC Reed-Solomon, paquetización, ajustes TOML, geometría (portable, sin Windows)
+lancast-platform/   Windows: DXGI/D3D11, captura, procesador de video, Media Foundation, WASAPI, SendInput,
+                    criptografía CNG, sockets, canal seguro, archivos
+lancast-host/       Servicio de host: emparejamiento, sesión, tubería de video y audio
+lancast-client/     Sesión de cliente: conexión, recepción con FEC, reloj, audio, archivos
+lancast-app/        LanCast.exe: interfaz (Dear ImGui), presentación, entrada, bandeja
+tests/              Unitarias (core), integración con el hardware (platform) y extremo a extremo (e2e)
+```
+
+### Dependencias
+
+| Dependencia | Versión | Uso |
+|---|---|---|
+| Windows SDK (D3D11, DXGI, Media Foundation, WASAPI, CNG, Winsock) | 10.0.22621+ | Todo lo de plataforma (incluido en Windows) |
+| Dear ImGui | v1.92.9 | Interfaz gráfica (compilada dentro del .exe) |
+| GoogleTest | v1.18.0 | Pruebas |
+
+## Pendiente
+
+- Cliente web para el celular (HTTPS, video, táctil y archivos).
+- App Android para compartir la pantalla del celular (opcional).
+- Captura de la pantalla segura de Windows (UAC, Ctrl+Alt+Supr), que requiere ejecutar el host como servicio de sistema.
+- 4:4:4 y HDR de 10 bits: la interfaz los permite elegir, pero los codificadores de Media Foundation transmiten 4:2:0 de 8 bits (el host lo indica al conectar).

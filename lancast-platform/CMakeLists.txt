@@ -1,5 +1,4 @@
-# Capa de plataforma Windows compartida por host y cliente (DXGI, D3D11, Media Foundation, DisplayConfig).
-# Separada de lancast-core para que el protocolo y los tipos sigan siendo portables.
+﻿# Capa de plataforma Windows compartida por host y cliente.
 add_library(lancast_platform STATIC
     src/com.cpp
     src/strings.cpp
@@ -8,11 +7,25 @@ add_library(lancast_platform STATIC
     src/monitors.cpp
     src/encoders.cpp
     src/decoders.cpp
-    src/system_report.cpp)
+    src/system_report.cpp
+    src/crypto.cpp
+    src/net.cpp
+    src/secure_channel.cpp
+    src/d3d.cpp
+    src/capture.cpp
+    src/video_processor.cpp
+    src/mf_encoder.cpp
+    src/mf_decoder.cpp
+    src/input.cpp
+    src/audio.cpp
+    src/system.cpp
+    src/session_crypto.cpp
+    src/files.cpp)
 add_library(lancast::platform ALIAS lancast_platform)
 
 target_include_directories(lancast_platform PUBLIC include PRIVATE src)
 target_link_libraries(lancast_platform
     PUBLIC lancast::core
-    PRIVATE dxgi d3d11 dxguid mfplat mfuuid shcore user32 ole32)
+    PRIVATE dxgi d3d11 dxguid mfplat mfuuid mf shcore user32 ole32 oleaut32 bcrypt crypt32 ws2_32 iphlpapi
+            ole32 uuid shell32 advapi32 gdi32)
 lancast_set_warnings(lancast_platform)

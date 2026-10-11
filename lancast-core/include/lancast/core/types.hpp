@@ -44,6 +44,12 @@ struct Rect {
     friend bool operator==(const Rect&, const Rect&) = default;
 };
 
+struct Size {
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+    friend bool operator==(const Size&, const Size&) = default;
+};
+
 struct Rational {
     std::uint32_t numerator = 0;
     std::uint32_t denominator = 1;

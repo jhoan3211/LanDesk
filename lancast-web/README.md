@@ -1,5 +1,5 @@
 # lancast-web
 
-Cliente web estático (HTML + TypeScript) que el host servirá por HTTPS en `https://<ip-host>:47990` para usar LanCast desde el celular.
+Cliente web para el celular (pendiente): página servida por el host por HTTPS para ver y controlar los PC desde el navegador del celular, con controles táctiles y subida/descarga de archivos.
 
-Se implementa en la **fase 8**: video por WebRTC (H.264), controles táctiles y subida/descarga de archivos por bloques.
+Requiere que el celular esté en la misma red que los PC (por ejemplo con un access point conectado al switch).

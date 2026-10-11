@@ -1,0 +1,80 @@
+#pragma once
+
+// Codificación y decodificación por hardware con Media Foundation.
+// - Codificador: el MFT de hardware del driver (NVENC / AMF / QuickSync) con entrada de textura D3D11 NV12.
+// - Decodificador: el MFT de decodificación de Windows con DXVA (D3D11), salida en textura NV12 de la GPU.
+// Así LanCast es un único .exe sin DLL de terceros.
+
+#include <memory>
+#include <optional>
+#include <span>
+#include <string>
+#include <vector>
+
+#include "lancast/core/settings.hpp"
+#include "lancast/core/types.hpp"
+#include "lancast/platform/d3d.hpp"
+
+namespace lancast::mf {
+
+// Inicializa Media Foundation mientras viva el objeto.
+class MfScope {
+public:
+    MfScope();
+    ~MfScope();
+    MfScope(const MfScope&) = delete;
+    MfScope& operator=(const MfScope&) = delete;
+};
+
+struct EncoderConfig {
+    Codec codec = Codec::H264;
+    Size size;
+    std::uint32_t fps = 60;
+    std::uint32_t bitrate_kbps = 20000;
+    RateControl rate_control = RateControl::Cbr;
+};
+
+struct EncodedPacket {
+    std::vector<std::uint8_t> data;
+    bool keyframe = false;
+    std::uint64_t timestamp_us = 0;
+};
+
+class Encoder {
+public:
+    virtual ~Encoder() = default;
+    // `nv12` debe seguir válido hasta la siguiente llamada (usar un pool de texturas).
+    virtual platform::Result<std::optional<EncodedPacket>> encode(ID3D11Texture2D* nv12, std::uint64_t timestamp_us,
+                                                                  bool force_keyframe) = 0;
+    virtual bool set_bitrate(std::uint32_t kbps) = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
+    [[nodiscard]] virtual const EncoderConfig& config() const = 0;
+};
+
+[[nodiscard]] platform::Result<std::unique_ptr<Encoder>> create_encoder(const gpu::Device& device,
+                                                                        const EncoderConfig& config);
+
+// Códecs que este equipo puede codificar por hardware en la GPU dada.
+[[nodiscard]] std::vector<Codec> available_encoders(std::uint64_t adapter_luid);
+
+struct DecodedFrame {
+    gpu::ComPtr<ID3D11Texture2D> texture;
+    UINT subresource = 0;
+    Size size;  // Tamaño visible (sin el relleno de alineación del decodificador).
+    gpu::ComPtr<IUnknown> keep_alive;  // Mantiene la superficie fuera del pool hasta presentarla.
+};
+
+class Decoder {
+public:
+    virtual ~Decoder() = default;
+    virtual platform::Result<std::optional<DecodedFrame>> decode(std::span<const std::uint8_t> data,
+                                                                 std::uint64_t timestamp_us) = 0;
+    [[nodiscard]] virtual std::string name() const = 0;
+};
+
+[[nodiscard]] platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size);
+
+// Códecs que este equipo puede decodificar (MFT de Windows con aceleración por hardware).
+[[nodiscard]] std::vector<Codec> available_decoders();
+
+}  // namespace lancast::mf
