@@ -1,0 +1,9 @@
+/build/
+/out/
+/.vs/
+/.vscode/
+CMakeUserPresets.json
+*.user
+*.h265
+*.h264
+*.ivf
