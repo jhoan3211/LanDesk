@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    name: Windows (MSVC, Release)
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Caché de dependencias (GoogleTest, Dear ImGui)
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: deps-${{ runner.os }}-${{ hashFiles('**/CMakeLists.txt') }}
+
+      - name: Configurar
+        run: cmake --preset vs2022
+
+      - name: Compilar
+        run: cmake --build --preset release -- /m /v:minimal
+
+      # Los runners no tienen GPU ni pantalla: las pruebas de hardware y extremo a extremo
+      # (etiqueta "hardware") se ejecutan solo en equipos reales.
+      - name: Pruebas
+        run: ctest --preset release -LE hardware
+
+      - name: SHA-256 del ejecutable
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash build/lancast-app/Release/LanCast.exe -Algorithm SHA256).Hash.ToLower()
+          "SHA-256: $hash" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Publicar artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanCast-${{ github.sha }}
+          path: build/lancast-app/Release/LanCast.exe
+          if-no-files-found: error
