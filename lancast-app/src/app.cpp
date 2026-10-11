@@ -383,10 +383,17 @@ void App::render() {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bb;
     swapchain_->GetBuffer(0, IID_PPV_ARGS(&bb));
     bool drew_video = false;
+    bool latency_seen = false;
     if (streaming() && renderer_ && renderer_->has_picture()) {
         const auto stream = session_->stream();
         const Rect view = view_rect({stream->width, stream->height}, backbuffer_size_, settings_.client.stream.scaling);
         drew_video = renderer_->draw(bb.Get(), backbuffer_size_, view);
+        // Medición de latencia: ¿ya se ve en la imagen el color que pintó el host?
+        if (drew_video) {
+            if (const auto target = session_->latency_target()) {
+                latency_seen = sample_matches(bb.Get(), view, *target);
+            }
+        }
     }
     if (!drew_video) {
         const float bg[4] = {0.075f, 0.082f, 0.098f, 1.0f};
@@ -403,11 +410,39 @@ void App::render() {
     swapchain_->Present(vsync ? 1 : 0, flags);
     last_present_us_ = gpu::now_us();
 
+    if (latency_seen) session_->latency_observed(last_present_us_);
     if (streaming() && last_present_us_ - last_presentation_check_us_ > 1'000'000) update_presentation_mode();
     if (new_video) {
+        if (!frame_presented_since_stream_ && options_.measure_latency) session_->start_latency_test();
         frame_presented_since_stream_ = true;
         session_->report_presented(last_frame.frame.info, last_frame.arrival_us, decode_ms, (last_present_us_ - t0) / 1000.0);
     }
+}
+
+bool App::sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const client::LatencyTarget& target) {
+    // Copia 1 píxel del back buffer a una textura de lectura (solo durante la medición: obliga a esperar a la GPU).
+    if (!latency_staging_) {
+        D3D11_TEXTURE2D_DESC d{};
+        d.Width = 1;
+        d.Height = 1;
+        d.MipLevels = 1;
+        d.ArraySize = 1;
+        d.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        d.SampleDesc.Count = 1;
+        d.Usage = D3D11_USAGE_STAGING;
+        d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        if (FAILED(device_.device->CreateTexture2D(&d, nullptr, &latency_staging_))) return false;
+    }
+    const UINT px = static_cast<UINT>(std::clamp<float>(view.x + target.x * view.width, 0.f, static_cast<float>(backbuffer_size_.width - 1)));
+    const UINT py = static_cast<UINT>(std::clamp<float>(view.y + target.y * view.height, 0.f, static_cast<float>(backbuffer_size_.height - 1)));
+    const D3D11_BOX box{px, py, 0, px + 1, py + 1, 1};
+    device_.context->CopySubresourceRegion(latency_staging_.Get(), 0, 0, 0, 0, backbuffer, 0, &box);
+    D3D11_MAPPED_SUBRESOURCE m{};
+    if (FAILED(device_.context->Map(latency_staging_.Get(), 0, D3D11_MAP_READ, 0, &m))) return false;
+    const auto* bgra = static_cast<const std::uint8_t*>(m.pData);
+    const int luma = (bgra[0] * 29 + bgra[1] * 150 + bgra[2] * 77) / 256;
+    device_.context->Unmap(latency_staging_.Get(), 0);
+    return target.white ? luma > 190 : luma < 60;
 }
 
 void App::update_presentation_mode() {

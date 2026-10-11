@@ -446,6 +446,12 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                     clipboard_ = t->text;
                 }
                 break;
+            case proto::MsgType::LatencyMark:
+                if (auto m = proto::LatencyMark::read(r)) {
+                    std::scoped_lock lock(mutex_);
+                    if (latency_running_ && m->id == latency_probe_id_) latency_mark_ = *m;
+                }
+                break;
             case proto::MsgType::Disconnect:
                 if (auto t = proto::TextMessage::read(r)) close_reason = t->text;
                 stopping_ = true;
@@ -507,6 +513,19 @@ void ClientSession::media_thread() {
             send_message(proto::encode(proto::MsgType::Ping, proto::PingPong{gpu::now_us(), 0}));
             last_ping = now;
         }
+        // Medición de latencia: si la sonda expiró (marca de reintento), mandar otra o rendirse.
+        bool retry = false;
+        bool give_up = false;
+        {
+            std::scoped_lock lock(mutex_);
+            // Si el cambio no se ve en 1 s (marcador tapado, otro monitor...), se reintenta.
+            if (latency_running_ && static_cast<std::int64_t>(now - latency_probe_sent_us_) > 1'000'000) {
+                give_up = ++latency_failures_ > 5;
+                retry = !give_up;
+            }
+        }
+        if (give_up) finish_latency_test();
+        if (retry) send_next_probe();
 
         net::Endpoint from;
         const auto n = sock->recv_from(buf, from, 20);
@@ -674,6 +693,77 @@ Stats ClientSession::stats() const {
     }
     stats_.audio_buffer_ms = self.player_.buffered_ms();
     return stats_;
+}
+
+void ClientSession::start_latency_test(int samples) {
+    {
+        std::scoped_lock lock(mutex_);
+        if (state_ != State::Connected) return;
+        latency_running_ = true;
+        latency_wanted_ = samples;
+        latency_samples_.clear();
+        latency_failures_ = 0;
+        stats_.latency_test_running = true;
+        stats_.latency_samples = 0;
+    }
+    send_next_probe();
+}
+
+void ClientSession::send_next_probe() {
+    proto::LatencyProbe probe;
+    {
+        std::scoped_lock lock(mutex_);
+        latency_white_ = !latency_white_;
+        probe.id = ++latency_probe_id_;
+        if (probe.id == 0) probe.id = ++latency_probe_id_;
+        probe.white = latency_white_;
+        latency_mark_.reset();
+        latency_probe_sent_us_ = gpu::now_us();
+    }
+    send_message(proto::encode(proto::MsgType::LatencyProbe, probe));
+}
+
+std::optional<LatencyTarget> ClientSession::latency_target() const {
+    std::scoped_lock lock(mutex_);
+    if (!latency_running_ || !latency_mark_) return std::nullopt;
+    return LatencyTarget{latency_mark_->x, latency_mark_->y, latency_mark_->white};
+}
+
+void ClientSession::latency_observed(std::uint64_t present_us) {
+    bool done = false;
+    {
+        std::scoped_lock lock(mutex_);
+        if (!latency_running_ || !latency_mark_) return;
+        const double host_local = static_cast<double>(static_cast<std::int64_t>(latency_mark_->host_time_us) - clock_offset_us_);
+        const double ms = (static_cast<double>(present_us) - host_local) / 1000.0;
+        if (ms > 0 && ms < 1000) latency_samples_.push_back(ms);
+        latency_mark_.reset();
+        stats_.latency_samples = static_cast<int>(latency_samples_.size());
+        done = static_cast<int>(latency_samples_.size()) >= latency_wanted_;
+    }
+    if (done) {
+        finish_latency_test();
+    } else {
+        send_next_probe();
+    }
+}
+
+void ClientSession::finish_latency_test() {
+    {
+        std::scoped_lock lock(mutex_);
+        latency_running_ = false;
+        stats_.latency_test_running = false;
+        if (!latency_samples_.empty()) {
+            std::vector<double> v = latency_samples_;
+            std::ranges::sort(v);
+            stats_.real_latency_ms = v[v.size() / 2];
+            stats_.real_latency_min_ms = v.front();
+            stats_.real_latency_max_ms = v.back();
+        }
+    }
+    send_message(proto::encode(proto::MsgType::LatencyProbe, proto::LatencyProbe{0, false}));  // Quitar el marcador.
+    log::info("Latencia real medida: {:.1f} ms (mín {:.1f}, máx {:.1f})", stats_.real_latency_ms, stats_.real_latency_min_ms,
+              stats_.real_latency_max_ms);
 }
 
 }  // namespace lancast::client

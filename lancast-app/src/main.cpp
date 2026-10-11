@@ -62,6 +62,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             verbose = true;
         } else if (a == L"--minimized") {
             opts.minimized = true;
+        } else if (a == L"--measure-latency") {
+            opts.measure_latency = true;
         } else if (a == L"--no-host") {
             opts.no_host = true;
         } else if (a == L"--connect" && i + 1 < argc) {

@@ -2,6 +2,7 @@
 #include <ws2tcpip.h>
 #include <iphlpapi.h>
 #include <mstcpip.h>
+#include <ws2ipdef.h>
 
 #include "lancast/platform/net.hpp"
 
@@ -9,6 +10,7 @@
 #include <charconv>
 #include <format>
 
+#include "lancast/core/log.hpp"
 #include "win.hpp"
 
 #ifndef SIO_UDP_CONNRESET
@@ -281,6 +283,40 @@ std::optional<std::size_t> UdpSocket::recv_from(std::span<std::uint8_t> buffer, 
     }
     from = from_sockaddr(a);
     return static_cast<std::size_t>(n);
+}
+
+bool UdpSocket::send_batch(const Endpoint& to, std::span<const std::uint8_t> data, std::uint32_t segment) {
+    if (data.size() <= segment) return send_to(to, data);
+#ifdef UDP_SEND_MSG_SIZE
+    if (uso_supported_) {
+        sockaddr_in addr = to_sockaddr(to);
+        WSABUF buf{static_cast<ULONG>(data.size()), reinterpret_cast<CHAR*>(const_cast<std::uint8_t*>(data.data()))};
+        alignas(WSACMSGHDR) char control[WSA_CMSG_SPACE(sizeof(DWORD))]{};
+        WSAMSG msg{};
+        msg.name = reinterpret_cast<sockaddr*>(&addr);
+        msg.namelen = sizeof(addr);
+        msg.lpBuffers = &buf;
+        msg.dwBufferCount = 1;
+        msg.Control.buf = control;
+        msg.Control.len = sizeof(control);
+        WSACMSGHDR* cm = WSA_CMSG_FIRSTHDR(&msg);
+        cm->cmsg_len = WSA_CMSG_LEN(sizeof(DWORD));
+        cm->cmsg_level = IPPROTO_UDP;
+        cm->cmsg_type = UDP_SEND_MSG_SIZE;
+        *reinterpret_cast<DWORD*>(WSA_CMSG_DATA(cm)) = segment;
+        DWORD sent = 0;
+        if (WSASendMsg(as_socket(socket_.handle()), &msg, 0, &sent, nullptr, nullptr) == 0) return true;
+        const int err = WSAGetLastError();
+        if (err != WSAEINVAL && err != WSAEOPNOTSUPP && err != WSAENOPROTOOPT) return false;
+        uso_supported_ = false;  // Windows antiguo o adaptador sin USO: envío clásico.
+        log::info("UDP Send Offload no disponible (error {}): envío paquete a paquete", err);
+    }
+#endif
+    bool ok = true;
+    for (std::size_t off = 0; off < data.size(); off += segment) {
+        ok = send_to(to, data.subspan(off, std::min<std::size_t>(segment, data.size() - off))) && ok;
+    }
+    return ok;
 }
 
 void UdpSocket::set_broadcast(bool on) {

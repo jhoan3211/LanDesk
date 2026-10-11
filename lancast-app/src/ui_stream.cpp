@@ -177,6 +177,12 @@ void App::draw_stream_toolbar() {
         save_settings();
     }
     ImGui::SameLine();
+    if (ImGui::Button("Medir latencia")) {
+        session_->start_latency_test();
+        show_stats_ = true;
+    }
+    ImGui::SetItemTooltip("El host muestra un cuadro blanco/negro en la esquina y se mide cuánto tarda en verse aquí");
+    ImGui::SameLine();
     if (ImGui::Button("Más opciones")) show_menu_ = true;
     ImGui::SameLine();
     if (ImGui::Button(fullscreen_ ? "Ventana" : "Pantalla completa")) toggle_fullscreen();
@@ -292,6 +298,13 @@ void App::draw_stats_overlay() {
     if (!presentation_mode_.empty()) {
         ImGui::TextColored(presentation_direct_ ? kGood : kWarn, "Presentación %s", presentation_mode_.c_str());
         if (!presentation_direct_) ImGui::TextColored(kMuted, "  Pantalla completa (Ctrl+Alt+Shift+F) quita ese frame extra");
+    }
+    if (s.latency_test_running) {
+        ImGui::TextColored(kAccent, "Midiendo latencia real… %d/10", s.latency_samples);
+    } else if (s.real_latency_ms > 0) {
+        const ImVec4 c = s.real_latency_ms < 15 ? kGood : s.real_latency_ms < 30 ? kWarn : kBad;
+        ImGui::TextColored(c, "Latencia real medida: %.1f ms (%.1f–%.1f)", s.real_latency_ms, s.real_latency_min_ms,
+                           s.real_latency_max_ms);
     }
     const ImVec4 total_color = s.total_ms < 10 ? kGood : s.total_ms < 25 ? kWarn : kBad;
     ImGui::TextColored(total_color, "Total extremo a extremo %s", fmt_ms(s.total_ms).c_str());

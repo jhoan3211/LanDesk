@@ -30,6 +30,7 @@ struct LaunchOptions {
     bool no_host = false;            // Solo cliente (útil para probar dos instancias en el mismo equipo).
     std::optional<std::string> connect;  // Conectar al iniciar.
     std::optional<std::string> pin;      // PIN para --connect (pruebas automatizadas).
+    bool measure_latency = false;        // Medir la latencia real al conectar (pruebas).
 };
 
 enum class Page { Connect, Host, Files, Settings, Diagnostics };
@@ -69,6 +70,7 @@ private:
     void apply_stream_settings();
     void apply_min_latency();
     void update_presentation_mode();
+    bool sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const client::LatencyTarget& target);
     void switch_monitor(std::uint32_t id);
     void process_client();
     void set_relative_mouse(bool on);
@@ -143,6 +145,7 @@ private:
     std::string presentation_mode_;                      // "directa" / "compuesta por DWM"
     bool presentation_direct_ = false;
     std::uint64_t last_presentation_check_us_ = 0;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> latency_staging_;
     HCURSOR remote_cursor_ = nullptr;
     bool remote_cursor_visible_ = true;
     HHOOK keyboard_hook_ = nullptr;

@@ -41,6 +41,19 @@ struct Stats {
     std::uint64_t frames_lost = 0;
     std::uint64_t keyframe_requests = 0;
     double audio_buffer_ms = 0;
+    // Medición de latencia real (captura en el host -> imagen dibujada en el cliente).
+    bool latency_test_running = false;
+    int latency_samples = 0;
+    double real_latency_ms = 0;      // Mediana de la última medición.
+    double real_latency_min_ms = 0;
+    double real_latency_max_ms = 0;
+};
+
+// Lo que el cliente debe buscar en la imagen durante la medición de latencia.
+struct LatencyTarget {
+    float x = 0;
+    float y = 0;
+    bool white = false;
 };
 
 struct DiscoveredHost {
@@ -96,6 +109,11 @@ public:
     void report_presented(const media::EncodedFrameInfo& info, std::uint64_t arrival_us, double decode_ms,
                           double present_ms);
     [[nodiscard]] Stats stats() const;
+
+    // Medición de latencia real: el host alterna un marcador blanco/negro y el cliente detecta el cambio.
+    void start_latency_test(int samples = 10);
+    [[nodiscard]] std::optional<LatencyTarget> latency_target() const;
+    void latency_observed(std::uint64_t present_us);  // La interfaz vio el color esperado en pantalla.
     void set_simulated_loss(std::uint32_t percent) noexcept { simulated_loss_ = percent; }
     void set_audio_output(std::uint32_t volume_percent, std::uint32_t buffer_ms) noexcept {
         player_.set_volume(static_cast<float>(volume_percent) / 100.0f);
@@ -163,6 +181,19 @@ private:
     std::uint64_t window_packets_ = 0;
     std::uint64_t window_min_seq_ = ~0ull;
     std::uint64_t window_max_seq_ = 0;
+
+    void send_next_probe();
+    void finish_latency_test();
+
+    // Medición de latencia (protegido por mutex_).
+    bool latency_running_ = false;
+    int latency_wanted_ = 0;
+    std::uint32_t latency_probe_id_ = 0;
+    bool latency_white_ = false;
+    std::optional<proto::LatencyMark> latency_mark_;
+    std::uint64_t latency_probe_sent_us_ = 0;
+    std::vector<double> latency_samples_;
+    int latency_failures_ = 0;
 
     files::Manager files_;
 };

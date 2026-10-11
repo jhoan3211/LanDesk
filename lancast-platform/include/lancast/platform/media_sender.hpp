@@ -42,6 +42,40 @@ public:
         return socket_.send_to(*ep, scratch);
     }
 
+    // Lote de datagramas del mismo tamaño enviados con una sola llamada (ver UdpSocket::send_batch).
+    class Batch {
+    public:
+        explicit Batch(MediaSender& sender) : sender_(sender) {}
+        ~Batch() { flush(); }
+        Batch(const Batch&) = delete;
+        Batch& operator=(const Batch&) = delete;
+
+        void add(DatagramCipher& cipher, media::PacketType type, std::span<const std::uint8_t> payload) {
+            std::uint8_t header[media::kPacketHeaderSize];
+            media::PacketHeader{type, sender_.seq_.fetch_add(1)}.write(header);
+            if (!cipher.seal(header, payload, scratch_)) return;
+            if (!buffer_.empty() && (scratch_.size() != segment_ || buffer_.size() + scratch_.size() > kMaxBatch)) flush();
+            segment_ = static_cast<std::uint32_t>(scratch_.size());
+            buffer_.insert(buffer_.end(), scratch_.begin(), scratch_.end());
+        }
+
+        void flush() {
+            if (buffer_.empty()) return;
+            if (const auto ep = sender_.endpoint()) {
+                sender_.bytes_sent_.fetch_add(buffer_.size());
+                sender_.socket_.send_batch(*ep, buffer_, segment_);
+            }
+            buffer_.clear();
+        }
+
+    private:
+        static constexpr std::size_t kMaxBatch = 60'000;  // USO admite hasta 64 KB por llamada.
+        MediaSender& sender_;
+        std::vector<std::uint8_t> buffer_;
+        std::vector<std::uint8_t> scratch_;
+        std::uint32_t segment_ = 0;
+    };
+
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept { return bytes_sent_.load(); }
 
 private:

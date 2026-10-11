@@ -22,7 +22,8 @@ add_library(lancast_platform STATIC
     src/audio.cpp
     src/system.cpp
     src/session_crypto.cpp
-    src/files.cpp)
+    src/files.cpp
+    src/marker_window.cpp)
 add_library(lancast::platform ALIAS lancast_platform)
 
 target_include_directories(lancast_platform PUBLIC include PRIVATE src)

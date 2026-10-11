@@ -14,6 +14,7 @@
 #include "lancast/platform/audio.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/input.hpp"
+#include "lancast/platform/marker_window.hpp"
 #include "lancast/platform/media_sender.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
@@ -67,6 +68,7 @@ struct Session {
     std::uint64_t started_us = 0;
     std::mutex clipboard_mutex;
     std::string last_remote_clipboard;
+    std::unique_ptr<sys::MarkerWindow> latency_marker;  // Solo mientras el cliente mide la latencia.
 };
 
 struct HostService::Impl {
@@ -519,6 +521,28 @@ struct HostService::Impl {
         }
     }
 
+    // Muestra un cuadro blanco/negro en la esquina del área transmitida y avisa cuándo cambió.
+    void handle_latency_probe(Session& s, const proto::LatencyProbe& probe) {
+        if (probe.id == 0) {
+            s.latency_marker.reset();
+            return;
+        }
+        const auto src = s.streamer ? s.streamer->source() : std::nullopt;
+        if (!src) return;
+        constexpr int kSize = 64;
+        constexpr int kMargin = 24;
+        if (!s.latency_marker) {
+            s.latency_marker = std::make_unique<sys::MarkerWindow>(Rect{src->x + kMargin, src->y + kMargin, kSize, kSize});
+        }
+        proto::LatencyMark mark;
+        mark.id = probe.id;
+        mark.white = probe.white;
+        mark.host_time_us = s.latency_marker->flash(probe.white);
+        mark.x = static_cast<float>(kMargin + kSize / 2) / static_cast<float>(src->width);
+        mark.y = static_cast<float>(kMargin + kSize / 2) / static_cast<float>(src->height);
+        if (mark.host_time_us != 0) s.channel->send(proto::encode(proto::MsgType::LatencyMark, mark));
+    }
+
     void run_session(Session& s) {
         send_host_info(s);
         const HostSettings hs = host_settings();
@@ -602,6 +626,9 @@ struct HostService::Impl {
                         }
                         input::set_clipboard_text(owner.hwnd_, t->text);
                     }
+                    break;
+                case proto::MsgType::LatencyProbe:
+                    if (auto probe = proto::LatencyProbe::read(r)) handle_latency_probe(s, *probe);
                     break;
                 case proto::MsgType::Disconnect:
                     return;

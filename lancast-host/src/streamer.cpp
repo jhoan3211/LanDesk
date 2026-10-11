@@ -470,7 +470,6 @@ void Streamer::sender_loop() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     sys::RealtimeThread mmcss(L"Games");
     auto cipher = sender_.make_cipher();
-    std::vector<std::uint8_t> scratch;
     while (running_) {
         SendJob job;
         {
@@ -480,8 +479,10 @@ void Streamer::sender_loop() {
             job = std::move(send_queue_.front());
             send_queue_.pop_front();
         }
+        // Todos los fragmentos de video miden lo mismo: se envían por lotes (UDP Send Offload).
+        net::MediaSender::Batch batch(sender_);
         media::packetize_frame(job.data, job.info, job.fec_percent, [&](std::span<const std::uint8_t> payload) {
-            sender_.send(*cipher, media::PacketType::Video, payload, scratch);
+            batch.add(*cipher, media::PacketType::Video, payload);
         });
     }
 }

@@ -107,6 +107,9 @@ public:
     static platform::Result<UdpSocket> bind(std::uint16_t port, bool reuse = false);
 
     bool send_to(const Endpoint& to, std::span<const std::uint8_t> data);
+    // Varios datagramas de `segment` bytes concatenados en una sola llamada (UDP Send Offload de Windows:
+    // el kernel/la tarjeta los separa). Si el sistema no lo soporta, se envían uno a uno.
+    bool send_batch(const Endpoint& to, std::span<const std::uint8_t> data, std::uint32_t segment);
     // Devuelve bytes recibidos, 0 si timeout, nullopt si error/cerrado.
     std::optional<std::size_t> recv_from(std::span<std::uint8_t> buffer, Endpoint& from, std::uint32_t timeout_ms);
     void set_broadcast(bool on);
@@ -118,6 +121,7 @@ public:
 
 private:
     Socket socket_;
+    bool uso_supported_ = true;
 };
 
 struct LocalAddress {

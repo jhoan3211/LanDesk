@@ -55,6 +55,8 @@ enum class MsgType : std::uint8_t {
     CursorShape = 27,
     CursorPos = 28,
     Disconnect = 30,
+    LatencyProbe = 31,  // Cliente -> host: mostrar el marcador en blanco/negro (id 0 = terminar).
+    LatencyMark = 32,   // Host -> cliente: instante en que el marcador cambió y dónde está.
 
     // Canal de archivos
     FileHello = 40,
@@ -293,6 +295,36 @@ struct CursorPos {
     static std::optional<CursorPos> read(ByteReader& r) {
         CursorPos c{r.boolean(), r.f32(), r.f32()};
         return r.ok() ? std::optional{c} : std::nullopt;
+    }
+};
+
+// --- Medición de latencia real (captura -> pantalla del cliente) ---
+
+struct LatencyProbe {
+    std::uint32_t id = 0;  // 0 = fin de la medición (el host quita el marcador).
+    bool white = false;
+    void write(ByteWriter& w) const { w.u32(id).boolean(white); }
+    static std::optional<LatencyProbe> read(ByteReader& r) {
+        LatencyProbe p{r.u32(), r.boolean()};
+        return r.ok() ? std::optional{p} : std::nullopt;
+    }
+};
+
+struct LatencyMark {
+    std::uint32_t id = 0;
+    std::uint64_t host_time_us = 0;  // Cuándo quedó el cambio en la pantalla del host (reloj del host).
+    float x = 0;                     // Centro del marcador, normalizado en el stream.
+    float y = 0;
+    bool white = false;
+    void write(ByteWriter& w) const { w.u32(id).u64(host_time_us).f32(x).f32(y).boolean(white); }
+    static std::optional<LatencyMark> read(ByteReader& r) {
+        LatencyMark m;
+        m.id = r.u32();
+        m.host_time_us = r.u64();
+        m.x = r.f32();
+        m.y = r.f32();
+        m.white = r.boolean();
+        return r.ok() ? std::optional{m} : std::nullopt;
     }
 };
 
