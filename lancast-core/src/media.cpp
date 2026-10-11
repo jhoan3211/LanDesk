@@ -99,7 +99,8 @@ void packetize_frame(std::span<const std::uint8_t> frame, const EncodedFrameInfo
             h.shard_index = static_cast<std::uint8_t>(shard);
             h.data_shards = static_cast<std::uint8_t>(k);
             h.parity_shards = static_cast<std::uint8_t>(m);
-            h.flags = info.keyframe ? kFrameFlagKeyframe : 0;
+            h.flags = static_cast<std::uint8_t>((info.keyframe ? kFrameFlagKeyframe : 0) | (info.slice ? kFrameFlagSlice : 0));
+            h.reserved = info.slice ? static_cast<std::uint16_t>(info.slice_index | (info.last_slice ? kSliceLast : 0)) : 0;
             h.frame_size = static_cast<std::uint32_t>(frame.size());
             h.capture_time_us = info.capture_time_us;
             h.encode_time_us = info.encode_time_us;
@@ -210,6 +211,9 @@ std::optional<AssembledFrame> FrameAssembler::add(const VideoShardHeader& h, std
     out.info.capture_time_us = frame.header.capture_time_us;
     out.info.encode_time_us = frame.header.encode_time_us;
     out.info.epoch = frame.header.epoch;
+    out.info.slice = (frame.header.flags & kFrameFlagSlice) != 0;
+    out.info.slice_index = static_cast<std::uint8_t>(frame.header.reserved & 0xFF);
+    out.info.last_slice = !out.info.slice || (frame.header.reserved & kSliceLast) != 0;
     out.recovered_by_fec = frame.used_parity;
 
     // Los frames anteriores que no se completaron se consideran perdidos.
@@ -233,6 +237,41 @@ std::optional<AssembledFrame> FrameAssembler::add(const VideoShardHeader& h, std
     stats_.frames_lost += lost;
     ++stats_.frames_completed;
     if (out.recovered_by_fec) ++stats_.frames_recovered;
+    return out;
+}
+
+std::optional<AssembledFrame> SliceJoiner::add(AssembledFrame unit) {
+    if (pending_ && pending_->info.epoch != unit.info.epoch) pending_.reset();  // Reconfiguración: no es pérdida.
+    if (!unit.info.slice) {
+        if (pending_) {
+            ++lost_;  // Cuadro por slices que quedó incompleto.
+            pending_.reset();
+        }
+        return unit;
+    }
+    if (unit.info.slice_index == 0) {
+        if (pending_) ++lost_;
+        pending_ = std::move(unit);
+    } else if (!pending_ || unit.info.frame_id != expected_unit_ || unit.info.slice_index != expected_slice_) {
+        // Falta un slice intermedio: el cuadro no se puede decodificar.
+        if (pending_) ++lost_;
+        pending_.reset();
+        return std::nullopt;
+    } else {
+        pending_->data.insert(pending_->data.end(), unit.data.begin(), unit.data.end());
+        pending_->info.keyframe = pending_->info.keyframe || unit.info.keyframe;
+        pending_->info.last_slice = unit.info.last_slice;
+        pending_->info.encode_time_us = unit.info.encode_time_us;
+        pending_->info.frame_id = unit.info.frame_id;
+        pending_->recovered_by_fec = pending_->recovered_by_fec || unit.recovered_by_fec;
+    }
+    expected_unit_ = pending_->info.frame_id + 1;
+    expected_slice_ = static_cast<std::uint8_t>(pending_->info.slice_index + 1);
+    if (unit.info.slice_index != 0) expected_slice_ = static_cast<std::uint8_t>(unit.info.slice_index + 1);
+    if (!pending_->info.last_slice) return std::nullopt;
+    AssembledFrame out = std::move(*pending_);
+    pending_.reset();
+    out.info.slice = false;
     return out;
 }
 

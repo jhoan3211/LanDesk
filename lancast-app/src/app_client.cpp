@@ -66,6 +66,8 @@ proto::StreamConfig App::make_stream_config() const {
     c.audio_rate = s.audio_sample_rate;
     c.audio_channels = s.audio_stereo ? 2 : 1;
     c.low_latency = s.low_latency;
+    c.intra_refresh = s.intra_refresh;
+    c.slices = s.slices;
     return c;
 }
 
@@ -97,6 +99,7 @@ void App::start_connect(const std::string& address) {
     proto::ClientCaps caps;
     caps.client_name = settings_.device_name;
     caps.decoders = mf::available_decoders();
+    caps.supports_slices = true;
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
     caps.display_width = static_cast<std::uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left);

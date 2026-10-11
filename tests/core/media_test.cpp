@@ -169,3 +169,67 @@ TEST(LossSimulator, FifteenPercentFecHandlesOnePercentLoss) {
     EXPECT_GE(completed, kFrames - 2) << "perdidos: " << a.stats().frames_lost;
     EXPECT_GT(a.stats().frames_recovered, 0u);
 }
+
+// --- Envío por slices -----------------------------------------------------------------------------
+
+namespace {
+
+std::vector<Packet> slice_packets(const std::vector<std::uint8_t>& data, std::uint32_t unit_id, std::uint8_t slice,
+                                  bool last, std::uint16_t epoch = 0) {
+    std::vector<Packet> out;
+    EncodedFrameInfo info{unit_id, slice == 0, 100, 5, epoch};
+    info.slice = true;
+    info.slice_index = slice;
+    info.last_slice = last;
+    packetize_frame(data, info, 10, [&](std::span<const std::uint8_t> p) { out.push_back(Packet{{p.begin(), p.end()}}); });
+    return out;
+}
+
+}  // namespace
+
+TEST(SliceJoiner, JoinsSlicesIntoOneFrame) {
+    std::mt19937 rng(11);
+    const auto s0 = random_frame(30'000, rng);
+    const auto s1 = random_frame(20'000, rng);
+    const auto s2 = random_frame(25'000, rng);
+    FrameAssembler a;
+    SliceJoiner j;
+    std::vector<AssembledFrame> frames;
+    std::uint32_t id = 1;
+    for (const auto& [data, idx, last] : {std::tuple{&s0, 0, false}, std::tuple{&s1, 1, false}, std::tuple{&s2, 2, true}}) {
+        for (const auto& p : slice_packets(*data, id, static_cast<std::uint8_t>(idx), last)) {
+            if (auto unit = feed(a, p)) {
+                if (auto f = j.add(std::move(*unit))) frames.push_back(std::move(*f));
+            }
+        }
+        ++id;
+    }
+    ASSERT_EQ(frames.size(), 1u);
+    std::vector<std::uint8_t> expected = s0;
+    expected.insert(expected.end(), s1.begin(), s1.end());
+    expected.insert(expected.end(), s2.begin(), s2.end());
+    EXPECT_EQ(frames[0].data, expected);
+    EXPECT_TRUE(frames[0].info.keyframe);
+    EXPECT_FALSE(frames[0].info.slice);
+    EXPECT_EQ(j.take_lost(), 0u);
+}
+
+TEST(SliceJoiner, DropsFrameWithMissingSlice) {
+    std::mt19937 rng(12);
+    FrameAssembler a;
+    SliceJoiner j;
+    int delivered = 0;
+    // Cuadro 1: slices 0 y 2 (falta el 1) -> perdido. Cuadro 2 completo -> entregado.
+    for (const auto& [id, idx, last, skip] : {std::tuple{1u, 0, false, false}, std::tuple{2u, 1, false, true},
+                                              std::tuple{3u, 2, true, false}, std::tuple{4u, 0, false, false},
+                                              std::tuple{5u, 1, true, false}}) {
+        if (skip) continue;
+        for (const auto& p : slice_packets(random_frame(8'000, rng), id, static_cast<std::uint8_t>(idx), last)) {
+            if (auto unit = feed(a, p)) {
+                if (j.add(std::move(*unit))) ++delivered;
+            }
+        }
+    }
+    EXPECT_EQ(delivered, 1);
+    EXPECT_GE(j.take_lost() + a.take_lost(), 1u);
+}

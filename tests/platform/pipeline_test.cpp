@@ -106,6 +106,7 @@ TEST_F(VideoPipeline, CaptureConvertEncodeDecode) {
         SCOPED_TRACE(std::string{to_string(codec)});
         auto enc = mf::create_encoder(*device, {codec, out_size, 60, 10000, RateControl::Cbr});
         ASSERT_TRUE(enc.has_value()) << enc.error().message();
+        std::printf("  Backend: %s (%s)\n", (*enc)->backend().c_str(), (*enc)->name().c_str());
 
         std::unique_ptr<mf::Decoder> dec;
         if (std::ranges::find(decoders, codec) != decoders.end()) {

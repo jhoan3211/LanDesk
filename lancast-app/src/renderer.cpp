@@ -44,7 +44,15 @@ bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarte
         needs_keyframe_ = true;
         return false;
     }
-    if (!out->has_value()) return false;
+    if (!out->has_value()) {
+        // El decodificador se tragó varios cuadros seguidos (p. ej. referencia perdida): pedir un keyframe.
+        if (++inputs_without_output_ >= 8) {
+            needs_keyframe_ = true;
+            inputs_without_output_ = 0;
+        }
+        return false;
+    }
+    inputs_without_output_ = 0;
     last_ = std::move(**out);
     return true;
 }

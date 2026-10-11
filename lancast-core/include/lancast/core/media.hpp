@@ -41,6 +41,10 @@ struct PacketHeader {
 };
 
 inline constexpr std::uint8_t kFrameFlagKeyframe = 0x01;
+// Envío por slices: cada slice viaja como una unidad propia (frame_id único) y VideoShardHeader::reserved
+// lleva el índice del slice y si es el último del cuadro.
+inline constexpr std::uint8_t kFrameFlagSlice = 0x02;
+inline constexpr std::uint16_t kSliceLast = 0x8000;
 
 struct VideoShardHeader {
     std::uint32_t frame_id = 0;
@@ -66,6 +70,9 @@ struct EncodedFrameInfo {
     std::uint64_t capture_time_us = 0;
     std::uint32_t encode_time_us = 0;
     std::uint16_t epoch = 0;
+    bool slice = false;         // Unidad parcial de un cuadro (modo slices).
+    std::uint8_t slice_index = 0;
+    bool last_slice = true;
 };
 
 // Divide un frame en bloques de fragmentos con paridad Reed-Solomon. Cada carga emitida
@@ -123,6 +130,26 @@ private:
     std::uint16_t epoch_ = 0;
     bool has_epoch_ = false;
     AssemblerStats stats_;
+};
+
+// Junta los slices de un cuadro (modo slices) y entrega el cuadro completo cuando llega el último.
+// Si falta cualquier slice intermedio, el cuadro se descarta (cuenta como perdido).
+class SliceJoiner {
+public:
+    // Devuelve un cuadro completo, o nada si aún faltan slices. Las unidades que no son slices pasan tal cual.
+    std::optional<AssembledFrame> add(AssembledFrame unit);
+    [[nodiscard]] std::uint32_t take_lost() noexcept {
+        const std::uint32_t n = lost_;
+        lost_ = 0;
+        return n;
+    }
+    void reset() { pending_.reset(); }
+
+private:
+    std::optional<AssembledFrame> pending_;
+    std::uint32_t expected_unit_ = 0;
+    std::uint8_t expected_slice_ = 0;
+    std::uint32_t lost_ = 0;
 };
 
 // Calcula k para cada bloque: reparte uniformemente los fragmentos de datos.

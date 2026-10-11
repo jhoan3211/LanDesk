@@ -197,15 +197,19 @@ void ClientSession::request_stream(const proto::StreamConfig& config) {
     send_message(proto::encode(proto::MsgType::StreamConfig, config));
 }
 
-void ClientSession::request_keyframe() {
-    std::uint64_t now = gpu::now_us();
+void ClientSession::request_keyframe() { request_recovery(proto::RecoveryReason::NeedKeyframe); }
+
+void ClientSession::request_recovery(proto::RecoveryReason reason) {
+    const std::uint64_t now = gpu::now_us();
+    // Una ola de intra-refresh dura unos pocos frames: no tiene sentido pedir otra enseguida.
+    const std::uint64_t min_gap = reason == proto::RecoveryReason::FrameLoss ? 300'000 : 30'000;
     {
         std::scoped_lock lock(mutex_);
-        if (now - last_idr_request_us_ < 30'000) return;
+        if (now - last_idr_request_us_ < min_gap) return;
         last_idr_request_us_ = now;
         ++stats_.keyframe_requests;
     }
-    send_message(proto::encode(proto::MsgType::RequestKeyframe));
+    send_message({static_cast<std::uint8_t>(proto::MsgType::RequestKeyframe), static_cast<std::uint8_t>(reason)});
 }
 
 bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host) {
@@ -542,14 +546,23 @@ void ClientSession::handle_video(std::span<const std::uint8_t> payload) {
     ByteReader r(payload);
     const auto h = media::VideoShardHeader::read(r);
     if (!h) return;
-    auto frame = assembler_.add(*h, r.rest());
-    const std::uint32_t lost = assembler_.take_lost();
+    std::optional<media::AssembledFrame> frame;
+    if (auto unit = assembler_.add(*h, r.rest())) frame = joiner_.add(std::move(*unit));  // Une los slices.
+    const std::uint32_t slice_lost = joiner_.take_lost();
+    const std::uint32_t lost = assembler_.take_lost() + slice_lost;
     bool need_idr = false;
+    bool need_refresh = false;
     {
         std::scoped_lock lock(mutex_);
+        slice_frames_lost_ += slice_lost;
         if (lost > 0) {
-            waiting_keyframe_ = true;
-            need_idr = true;
+            if (stream_ && stream_->intra_refresh && !waiting_keyframe_) {
+                // Intra-refresh: se sigue mostrando video; la zona dañada se repara en pocos frames.
+                need_refresh = true;
+            } else {
+                waiting_keyframe_ = true;
+                need_idr = true;
+            }
         }
         if (frame) {
             last_frame_us_ = gpu::now_us();
@@ -564,9 +577,13 @@ void ClientSession::handle_video(std::span<const std::uint8_t> payload) {
             }
         }
         stats_.frames_recovered = assembler_.stats().frames_recovered;
-        stats_.frames_lost = assembler_.stats().frames_lost;
+        stats_.frames_lost = assembler_.stats().frames_lost + slice_frames_lost_;
     }
-    if (need_idr) request_keyframe();
+    if (need_idr) {
+        request_keyframe();
+    } else if (need_refresh) {
+        request_recovery(proto::RecoveryReason::FrameLoss);
+    }
     if (frame) SetEvent(frame_event_);
 }
 

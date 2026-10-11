@@ -46,6 +46,8 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("audio_buffer_ms", static_cast<std::int64_t>(s.audio_buffer_ms));
     t.set("fec_percent", static_cast<std::int64_t>(s.fec_percent));
     t.set("low_latency", s.low_latency);
+    t.set("intra_refresh", s.intra_refresh);
+    t.set("slices", s.slices);
 }
 
 StreamSettings stream_from_table(const toml::Table& t) {
@@ -71,6 +73,8 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.audio_buffer_ms = clamp_u32(t.get_int("audio_buffer_ms").value_or(s.audio_buffer_ms), 5, 200);
     s.fec_percent = clamp_u32(t.get_int("fec_percent").value_or(s.fec_percent), 0, 50);
     s.low_latency = t.get_bool("low_latency").value_or(s.low_latency);
+    s.intra_refresh = t.get_bool("intra_refresh").value_or(s.intra_refresh);
+    s.slices = t.get_bool("slices").value_or(s.slices);
     return s;
 }
 

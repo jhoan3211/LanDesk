@@ -322,6 +322,15 @@ void App::draw_stream_settings(bool live) {
         row("Codificador");
         if (ImGui::Checkbox("Latencia mínima##ll", &s.low_latency)) changed = true;
         help("Preset más rápido del codificador y búfer de 1 frame. Desactívalo para más calidad con poco bitrate.");
+        row("Pérdidas");
+        if (ImGui::Checkbox("Intra-refresh (experimental)##ir", &s.intra_refresh)) changed = true;
+        help("Ante un paquete perdido la imagen se repara en pocos cuadros en vez de pedir un keyframe completo. "
+             "Con los decodificadores de Windows suele recuperar más lento que un keyframe: déjalo apagado salvo "
+             "que veas picos al recuperarse.");
+        row("Envío");
+        if (ImGui::Checkbox("Por slices (sub-frame)##sl", &s.slices)) changed = true;
+        help("El cuadro se envía en partes a medida que el codificador las termina: la red trabaja en paralelo "
+             "con la codificación. Solo si la GPU del host lo soporta.");
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();

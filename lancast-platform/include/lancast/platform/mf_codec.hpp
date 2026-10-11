@@ -33,13 +33,19 @@ struct EncoderConfig {
     std::uint32_t fps = 60;
     std::uint32_t bitrate_kbps = 20000;
     RateControl rate_control = RateControl::Cbr;
-    bool low_latency = true;  // Preset más rápido y VBV de 1 frame.
+    bool low_latency = true;    // Preset más rápido y VBV de 1 frame.
+    bool direct = true;         // Usar NVENC/AMF directamente si la GPU lo permite (si no, Media Foundation).
+    bool intra_refresh = false; // Recuperación por intra-refresh continuo en vez de keyframes completos.
+    bool slices = false;        // Entregar el frame por slices a medida que se codifican (envío sub-frame).
 };
 
 struct EncodedPacket {
     std::vector<std::uint8_t> data;
     bool keyframe = false;
     std::uint64_t timestamp_us = 0;
+    // Modo slices: un frame llega en varios paquetes; el último lleva last_slice = true.
+    std::uint8_t slice_index = 0;
+    bool last_slice = true;
 };
 
 class Encoder {
@@ -57,6 +63,14 @@ public:
     virtual platform::Result<std::optional<EncodedPacket>> encode(ID3D11Texture2D* nv12, std::uint64_t timestamp_us,
                                                                   bool force_keyframe) = 0;
     virtual bool set_bitrate(std::uint32_t kbps) = 0;
+    // ¿El codificador mantiene intra-refresh continuo? (el cliente puede seguir decodificando tras una pérdida)
+    [[nodiscard]] virtual bool intra_refresh_active() const { return false; }
+    // Ante una pérdida: ola de intra-refresh en lugar de keyframe (NVENC). AMF usa intra-refresh continuo.
+    virtual void request_intra_refresh() {}
+    // ¿Entrega el frame por slices (EncodedPacket::last_slice)?
+    [[nodiscard]] virtual bool slices_active() const { return false; }
+    // "Media Foundation", "AMF directo", "NVENC directo".
+    [[nodiscard]] virtual std::string backend() const = 0;
     [[nodiscard]] virtual std::string name() const = 0;
     [[nodiscard]] virtual const EncoderConfig& config() const = 0;
 };

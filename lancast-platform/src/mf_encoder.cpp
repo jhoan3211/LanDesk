@@ -218,6 +218,7 @@ public:
 
     [[nodiscard]] std::string name() const override { return name_; }
     [[nodiscard]] const EncoderConfig& config() const override { return config_; }
+    [[nodiscard]] std::string backend() const override { return "Media Foundation"; }
 
 private:
     MfEncoder() = default;
@@ -493,7 +494,20 @@ private:
 
 }  // namespace
 
+platform::Result<std::unique_ptr<Encoder>> create_amf_encoder(const gpu::Device& device, const EncoderConfig& config);
+platform::Result<std::unique_ptr<Encoder>> create_nvenc_encoder(const gpu::Device& device, const EncoderConfig& config);
+
 platform::Result<std::unique_ptr<Encoder>> create_encoder(const gpu::Device& device, const EncoderConfig& config) {
+    // 1) API directa del fabricante (menor latencia, más opciones); 2) Media Foundation como respaldo.
+    if (config.direct) {
+        platform::Result<std::unique_ptr<Encoder>> direct = std::unexpected(platform::Error{"sin codificador directo", 0});
+        if (device.vendor == GpuVendor::Amd) direct = create_amf_encoder(device, config);
+        if (device.vendor == GpuVendor::Nvidia) direct = create_nvenc_encoder(device, config);
+        if (direct) return direct;
+        if (device.vendor == GpuVendor::Amd || device.vendor == GpuVendor::Nvidia) {
+            log::warn("Codificador directo no disponible ({}); se usa Media Foundation", direct.error().message());
+        }
+    }
     auto enc = MfEncoder::create(device, config);
     if (!enc) return std::unexpected(enc.error());
     return std::unique_ptr<Encoder>{std::move(*enc)};

@@ -80,6 +80,8 @@ public:
 
     void request_stream(const proto::StreamConfig& config);
     void request_keyframe();
+    // FrameLoss: el host repara con intra-refresh si el stream lo usa; NeedKeyframe: keyframe completo.
+    void request_recovery(proto::RecoveryReason reason);
     void send_message(const std::vector<std::uint8_t>& encoded);
 
     // Frames completos en orden (todos: los P-frames dependen de los anteriores).
@@ -132,6 +134,8 @@ private:
 
     // Video
     media::FrameAssembler assembler_;
+    media::SliceJoiner joiner_;
+    std::uint64_t slice_frames_lost_ = 0;
     std::deque<Frame> frames_;
     void* frame_event_ = nullptr;
     bool waiting_keyframe_ = true;

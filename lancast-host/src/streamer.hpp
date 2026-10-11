@@ -34,8 +34,16 @@ public:
     Streamer& operator=(const Streamer&) = delete;
 
     void configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
-                   std::uint32_t audio_rate, std::uint8_t audio_channels);
+                   std::uint32_t audio_rate, std::uint8_t audio_channels, bool client_slices);
     void request_keyframe() noexcept { keyframe_requested_ = true; }
+    // Pérdida de un cuadro: si el stream usa intra-refresh se repara con una ola de refresco; si no, keyframe.
+    void request_recovery(proto::RecoveryReason reason) noexcept {
+        if (reason == proto::RecoveryReason::FrameLoss) {
+            refresh_requested_ = true;
+        } else {
+            keyframe_requested_ = true;
+        }
+    }
     void stop();
 
     [[nodiscard]] StreamStats stats() const;
@@ -59,11 +67,13 @@ private:
     std::thread thread_;
     std::atomic<bool> running_{true};
     std::atomic<bool> keyframe_requested_{true};
+    std::atomic<bool> refresh_requested_{false};
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::optional<proto::StreamConfig> pending_;
     std::vector<Codec> client_decoders_;
+    bool client_slices_ = false;
     std::uint32_t audio_rate_ = 0;
     std::uint8_t audio_channels_ = 0;
     std::optional<proto::StreamStarted> current_;

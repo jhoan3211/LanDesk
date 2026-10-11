@@ -47,6 +47,7 @@ private:
     std::string error_;
     bool needs_keyframe_ = false;
     bool draw_failed_logged_ = false;
+    int inputs_without_output_ = 0;
 };
 
 }  // namespace lancast::app

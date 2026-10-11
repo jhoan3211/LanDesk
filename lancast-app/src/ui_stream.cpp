@@ -301,6 +301,10 @@ void App::draw_stats_overlay() {
                 static_cast<unsigned long long>(s.frames_recovered), static_cast<unsigned long long>(s.frames_lost),
                 static_cast<unsigned long long>(s.keyframe_requests));
     if (stream && stream->audio_rate > 0) ImGui::Text("Audio: %u Hz · buffer %.0f ms", stream->audio_rate, s.audio_buffer_ms);
+    if (stream && !stream->encoder_backend.empty()) {
+        ImGui::TextColored(kMuted, "Codificador: %s%s%s", stream->encoder_backend.c_str(),
+                           stream->intra_refresh ? " · intra-refresh" : "", stream->slices ? " · slices" : "");
+    }
     ImGui::TextColored(kMuted, "Decodificador: %s", renderer_ ? renderer_->decoder_name().c_str() : "-");
     ImGui::End();
 }

@@ -65,6 +65,7 @@ proto::ClientCaps make_caps(const char* name) {
     proto::ClientCaps caps;
     caps.client_name = name;
     caps.decoders = mf::available_decoders();
+    caps.supports_slices = true;
     caps.display_width = 1920;
     caps.display_height = 1080;
     return caps;
@@ -108,8 +109,9 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_TRUE(host.status().session_active);
 
     const auto stream = *client.stream();
-    std::printf("  Stream: %s %ux%u @ %u fps, %u Mbps, audio %u Hz\n", std::string{to_string(stream.codec)}.c_str(),
-                stream.width, stream.height, stream.fps, stream.bitrate_kbps / 1000, stream.audio_rate);
+    std::printf("  Stream: %s %ux%u @ %u fps, %u Mbps, audio %u Hz, %s%s%s\n", std::string{to_string(stream.codec)}.c_str(),
+                stream.width, stream.height, stream.fps, stream.bitrate_kbps / 1000, stream.audio_rate,
+                stream.encoder_backend.c_str(), stream.intra_refresh ? ", intra-refresh" : "", stream.slices ? ", slices" : "");
     EXPECT_LE(stream.width, 1280u);
     EXPECT_LE(stream.height, 720u);
 
@@ -145,6 +147,32 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     const auto stats = client.stats();
     std::printf("  Latencia: codificación %.2f ms, red %.2f ms, total %.2f ms, RTT %.2f ms\n", stats.encode_ms,
                 stats.network_ms, stats.total_ms, stats.rtt_ms);
+
+    // 2b) 3 % de pérdida simulada: con FEC + intra-refresh el video sigue fluyendo.
+    client.set_simulated_loss(3);
+    int lossy_frames = 0;
+    int lossy_decoded = 0;
+    const auto requests_before = client.stats().keyframe_requests;
+    const std::uint64_t lossy_until = gpu::now_us() + 1'500'000;
+    while (gpu::now_us() < lossy_until) {
+        WaitForSingleObject(client.frame_event(), 50);
+        for (auto& f : client.take_frames()) {
+            ++lossy_frames;
+            auto out = (*decoder)->decode(f.frame.data, f.frame.info.capture_time_us);
+            if (out && out->has_value()) ++lossy_decoded;
+            if (!out) {
+                std::printf("    error de decodificación: %s\n", out.error().message().c_str());
+                break;
+            }
+        }
+    }
+    client.set_simulated_loss(0);
+    const auto after = client.stats();
+    std::printf("  Con 3%% de pérdida: %d frames, %d decodificados, recuperados por FEC %llu, perdidos %llu, pedidos %llu\n",
+                lossy_frames, lossy_decoded, static_cast<unsigned long long>(after.frames_recovered),
+                static_cast<unsigned long long>(after.frames_lost),
+                static_cast<unsigned long long>(after.keyframe_requests - requests_before));
+    EXPECT_GT(lossy_decoded, 0);
 
     // 3) Reconfiguración en vivo (sin reconectar).
     proto::StreamConfig cfg2 = make_config();

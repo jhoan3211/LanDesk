@@ -124,6 +124,7 @@ struct ClientCaps {
     std::uint32_t display_width = 0;
     std::uint32_t display_height = 0;
     std::uint32_t display_refresh = 60;
+    bool supports_slices = false;  // Opcional (1.3+): sabe reensamblar frames enviados por slices.
     void write(ByteWriter& w) const;
     static std::optional<ClientCaps> read(ByteReader& r);
 };
@@ -167,6 +168,8 @@ struct StreamConfig {
     std::uint32_t audio_rate = 0;     // 0 = la del sistema del host.
     std::uint8_t audio_channels = 2;  // 1 = mono, 2 = estéreo.
     bool low_latency = true;          // Opcional (1.2+): preset rápido del codificador.
+    bool intra_refresh = false;       // Opcional (1.3+): recuperar pérdidas con intra-refresh.
+    bool slices = true;               // Opcional (1.3+): envío por slices (sub-frame).
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };
@@ -183,8 +186,17 @@ struct StreamStarted {
     std::uint32_t audio_rate = 0;  // 0 = sin audio
     std::uint8_t audio_channels = 0;
     std::string notes;  // Avisos (p. ej. "4:4:4 no soportado, usando 4:2:0").
+    bool intra_refresh = false;   // Opcional (1.3+): el cliente puede seguir decodificando tras una pérdida.
+    bool slices = false;          // Opcional (1.3+): los frames llegan por slices.
+    std::string encoder_backend;  // Opcional (1.3+): "AMF directo", "NVENC directo", "Media Foundation".
     void write(ByteWriter& w) const;
     static std::optional<StreamStarted> read(ByteReader& r);
+};
+
+// Motivo de RequestKeyframe (cuerpo opcional; sin cuerpo = NeedKeyframe).
+enum class RecoveryReason : std::uint8_t {
+    NeedKeyframe = 0,  // El decodificador necesita empezar de cero (nuevo stream, error).
+    FrameLoss = 1,     // Se perdió un frame: vale una ola de intra-refresh si el stream la usa.
 };
 
 struct TextMessage {

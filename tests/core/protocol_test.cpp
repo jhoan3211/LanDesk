@@ -150,3 +150,29 @@ TEST(Encoding, HexAndBase64) {
         EXPECT_EQ(base64_decode(base64_encode(part)).value(), part);
     }
 }
+
+TEST(Protocol, StreamConfigFromOlderClientHasNewFeaturesOff) {
+    // Un cliente 1.2 no envía intra_refresh ni slices: el host debe tratarlos como desactivados.
+    StreamConfig c;
+    ByteWriter w;
+    c.write(w);
+    std::vector<std::uint8_t> old_bytes = w.take();
+    old_bytes.resize(old_bytes.size() - 2);  // Sin los dos booleanos de la 1.3.
+    ByteReader r(old_bytes);
+    const auto out = StreamConfig::read(r);
+    ASSERT_TRUE(out.has_value());
+    EXPECT_FALSE(out->intra_refresh);
+    EXPECT_FALSE(out->slices);
+    EXPECT_TRUE(out->low_latency);
+}
+
+TEST(Protocol, StreamStartedOptionalFieldsRoundtrip) {
+    StreamStarted s;
+    s.intra_refresh = true;
+    s.slices = true;
+    s.encoder_backend = "AMF directo";
+    const StreamStarted out = roundtrip(s);
+    EXPECT_TRUE(out.intra_refresh);
+    EXPECT_TRUE(out.slices);
+    EXPECT_EQ(out.encoder_backend, "AMF directo");
+}

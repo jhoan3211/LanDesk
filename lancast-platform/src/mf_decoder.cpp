@@ -119,6 +119,13 @@ private:
             v.vt = VT_UI4;
             v.ulVal = 1;
             api->SetValue(&CODECAPI_AVLowLatencyMode, &v);
+            // Mostrar los cuadros aunque falte una referencia (tras una pérdida): con intra-refresh la imagen
+            // se repara sola en pocos cuadros; sin esto el decodificador se congela hasta el próximo keyframe.
+            VARIANT keep;
+            VariantInit(&keep);
+            keep.vt = VT_BOOL;
+            keep.boolVal = VARIANT_FALSE;
+            api->SetValue(&CODECAPI_AVDecVideoDropPicWithMissingRef, &keep);
         }
         if (!d3d11_aware) return std::unexpected(platform::Error{"El decodificador no soporta D3D11", 0});
 

@@ -93,6 +93,7 @@ void ClientCaps::write(ByteWriter& w) const {
     w.str(client_name);
     write_codecs(w, decoders);
     w.u32(display_width).u32(display_height).u32(display_refresh);
+    w.boolean(supports_slices);
 }
 
 std::optional<ClientCaps> ClientCaps::read(ByteReader& r) {
@@ -102,6 +103,7 @@ std::optional<ClientCaps> ClientCaps::read(ByteReader& r) {
     c.display_width = r.u32();
     c.display_height = r.u32();
     c.display_refresh = r.u32();
+    if (r.ok() && r.remaining() >= 1) c.supports_slices = r.boolean();
     return finish(r, std::move(c));
 }
 
@@ -148,6 +150,7 @@ void StreamConfig::write(ByteWriter& w) const {
         fec_percent);
     w.u32(audio_rate).u8(audio_channels);
     w.boolean(low_latency);
+    w.boolean(intra_refresh).boolean(slices);
 }
 
 std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
@@ -168,6 +171,13 @@ std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
     c.audio_channels = r.u8();
     if (c.audio_channels < 1 || c.audio_channels > 2) c.audio_channels = 2;
     if (r.ok() && r.remaining() >= 1) c.low_latency = r.boolean();  // Ausente en clientes 1.1.0.
+    if (r.ok() && r.remaining() >= 2) {                               // Ausentes en clientes 1.2.0.
+        c.intra_refresh = r.boolean();
+        c.slices = r.boolean();
+    } else {
+        c.intra_refresh = false;
+        c.slices = false;
+    }
     if (static_cast<int>(c.codec) > 3 || static_cast<int>(c.rate_control) > 1) return std::nullopt;
     return finish(r, std::move(c));
 }
@@ -176,6 +186,7 @@ void StreamStarted::write(ByteWriter& w) const {
     w.u16(epoch).u8(static_cast<std::uint8_t>(codec)).u32(width).u32(height).u32(fps).u32(bitrate_kbps).u32(monitor_id);
     write_rect(w, source);
     w.u32(audio_rate).u8(audio_channels).str(notes);
+    w.boolean(intra_refresh).boolean(slices).str(encoder_backend);
 }
 
 std::optional<StreamStarted> StreamStarted::read(ByteReader& r) {
@@ -191,6 +202,11 @@ std::optional<StreamStarted> StreamStarted::read(ByteReader& r) {
     s.audio_rate = r.u32();
     s.audio_channels = r.u8();
     s.notes = r.str(4096);
+    if (r.ok() && r.remaining() >= 2) {
+        s.intra_refresh = r.boolean();
+        s.slices = r.boolean();
+        if (r.remaining() >= 4) s.encoder_backend = r.str(128);
+    }
     if (static_cast<int>(s.codec) > 2) return std::nullopt;
     return finish(r, std::move(s));
 }

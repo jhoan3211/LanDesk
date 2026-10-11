@@ -37,6 +37,7 @@ struct EncodeContext {
     std::uint16_t epoch = 0;
     std::atomic<int> fec{15};
     std::uint32_t next_frame_id = 0;
+    bool slices = false;
 };
 
 struct Pipeline {
@@ -78,10 +79,11 @@ void Streamer::stop() {
 }
 
 void Streamer::configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
-                         std::uint32_t audio_rate, std::uint8_t audio_channels) {
+                         std::uint32_t audio_rate, std::uint8_t audio_channels, bool client_slices) {
     std::scoped_lock lock(mutex_);
     pending_ = config;
     client_decoders_ = client_decoders;
+    client_slices_ = client_slices;
     audio_rate_ = audio_rate;
     audio_channels_ = audio_channels;
     cv_.notify_all();
@@ -134,7 +136,7 @@ void Streamer::run() {
     };
 
     auto build = [&](const proto::StreamConfig& cfg, const std::vector<Codec>& decoders, std::uint32_t audio_rate,
-                     std::uint8_t audio_channels) {
+                     std::uint8_t audio_channels, bool client_slices) {
         auto gpus = platform::enumerate_gpus();
         if (!gpus) return fail(gpus.error().message());
         auto monitors = platform::enumerate_monitors(*gpus);
@@ -229,7 +231,11 @@ void Streamer::run() {
             bitrate_kbps = cfg.auto_bitrate ? auto_bitrate_mbps(stream_size.width, stream_size.height, fps, c) * 1000
                                             : std::clamp<std::uint32_t>(cfg.bitrate_kbps, kMinBitrateMbps * 1000,
                                                                         kMaxBitrateMbps * 1000);
-            auto enc = mf::create_encoder(next->device, {c, stream_size, fps, bitrate_kbps, cfg.rate_control, cfg.low_latency});
+            mf::EncoderConfig ec{c, stream_size, fps, bitrate_kbps, cfg.rate_control, cfg.low_latency};
+            ec.direct = true;
+            ec.intra_refresh = cfg.intra_refresh;
+            ec.slices = cfg.slices && client_slices;
+            auto enc = mf::create_encoder(next->device, ec);
             if (enc) {
                 next->encoder = std::move(*enc);
                 codec = c;
@@ -243,6 +249,7 @@ void Streamer::run() {
         next->ctx = std::make_shared<EncodeContext>();
         next->ctx->epoch = epoch;
         next->ctx->fec = static_cast<int>(cfg.fec_percent);
+        next->ctx->slices = next->encoder->slices_active();
         // Salida en paralelo: cada frame codificado va directo al hilo de envío.
         next->encoder->set_output_callback([this, ctx = next->ctx](mf::EncodedPacket&& pkt) {
             const std::uint64_t encoded_us = gpu::now_us();
@@ -253,12 +260,15 @@ void Streamer::run() {
                 while (!ctx->in_flight.empty() && ctx->in_flight.front().ts < pkt.timestamp_us) ctx->in_flight.pop_front();
                 if (!ctx->in_flight.empty() && ctx->in_flight.front().ts == pkt.timestamp_us) {
                     f = ctx->in_flight.front();
-                    ctx->in_flight.pop_front();
+                    if (pkt.last_slice) ctx->in_flight.pop_front();
                 }
                 info.frame_id = ++ctx->next_frame_id;
                 info.epoch = ctx->epoch;
             }
             info.keyframe = pkt.keyframe;
+            info.slice = ctx->slices;
+            info.slice_index = pkt.slice_index;
+            info.last_slice = pkt.last_slice;
             info.capture_time_us = f.capture_us;
             info.encode_time_us = static_cast<std::uint32_t>(encoded_us - std::min(f.capture_us, encoded_us));
             const std::size_t bytes = pkt.data.size();
@@ -269,10 +279,11 @@ void Streamer::run() {
             send_cv_.notify_one();
 
             std::scoped_lock lock(mutex_);
+            window_bytes_ += bytes;
+            if (!pkt.last_slice) return;  // Las estadísticas por cuadro se cuentan con el último slice.
             ++stats_.frames;
             if (info.keyframe) ++stats_.keyframes;
             ++window_frames_;
-            window_bytes_ += bytes;
             window_latency_ms_ += info.encode_time_us / 1000.0;
             window_wait_ms_ += static_cast<double>(f.encode_start_us - std::min(f.capture_us, f.encode_start_us)) / 1000.0;
             window_encode_ms_ += static_cast<double>(encoded_us - std::min(f.encode_start_us, encoded_us)) / 1000.0;
@@ -305,6 +316,9 @@ void Streamer::run() {
         next->info.audio_rate = cfg.audio ? audio_rate : 0;
         next->info.audio_channels = cfg.audio ? audio_channels : 0;
         next->info.notes = notes;
+        next->info.intra_refresh = next->encoder->intra_refresh_active();
+        next->info.slices = next->encoder->slices_active();
+        next->info.encoder_backend = next->encoder->backend();
         p = std::move(next);
         {
             std::scoped_lock lock(mutex_);
@@ -325,6 +339,7 @@ void Streamer::run() {
         std::vector<Codec> decoders;
         std::uint32_t audio_rate = 0;
         std::uint8_t audio_channels = 0;
+        bool client_slices = false;
         {
             std::unique_lock lock(mutex_);
             if (!p && !pending_) cv_.wait_for(lock, std::chrono::milliseconds(200), [&] { return pending_ || !running_; });
@@ -332,6 +347,7 @@ void Streamer::run() {
                 cfg = pending_;
                 pending_.reset();
                 decoders = client_decoders_;
+                client_slices = client_slices_;
                 audio_rate = audio_rate_;
                 audio_channels = audio_channels_;
             }
@@ -342,7 +358,8 @@ void Streamer::run() {
             if (p && p->config.monitor_id == cfg->monitor_id && p->config.max_width == cfg->max_width &&
                 p->config.max_height == cfg->max_height && p->config.fps == cfg->fps && p->config.codec == cfg->codec &&
                 p->config.rate_control == cfg->rate_control && p->config.chroma_444 == cfg->chroma_444 &&
-                p->config.hdr == cfg->hdr && p->config.low_latency == cfg->low_latency) {
+                p->config.hdr == cfg->hdr && p->config.low_latency == cfg->low_latency &&
+                p->config.intra_refresh == cfg->intra_refresh && p->config.slices == cfg->slices) {
                 const std::uint32_t kbps = cfg->auto_bitrate
                                                ? auto_bitrate_mbps(p->stream_size.width, p->stream_size.height,
                                                                    p->info.fps, p->info.codec) * 1000
@@ -357,7 +374,7 @@ void Streamer::run() {
                 current_ = p->info;
                 if (callbacks_.started) callbacks_.started(p->info);
             } else {
-                build(*cfg, decoders, audio_rate, audio_channels);
+                build(*cfg, decoders, audio_rate, audio_channels, client_slices);
             }
         }
         if (!p) continue;
@@ -401,6 +418,13 @@ void Streamer::run() {
         if (!dirty && now - last_encode_us > 1'000'000) {
             dirty = true;
             dirty_since_us = now;
+        }
+        if (refresh_requested_.exchange(false)) {
+            if (p->encoder->intra_refresh_active()) {
+                p->encoder->request_intra_refresh();  // NVENC: ola bajo demanda; AMF: refresco continuo.
+            } else {
+                keyframe_requested_ = true;
+            }
         }
         const bool idr = keyframe_requested_.exchange(false);
         if (!(dirty || idr) || (!idr && now - last_encode_us + 1000 < interval_us)) {

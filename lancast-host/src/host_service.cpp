@@ -557,12 +557,17 @@ struct HostService::Impl {
                         const std::uint32_t rate = c->audio_rate == 0 ? fmt.sample_rate : std::clamp<std::uint32_t>(c->audio_rate, 8000, 192000);
                         s.audio_target_rate = c->audio_rate == 0 ? 0 : rate;
                         s.audio_target_channels = c->audio_channels == 1 ? 1 : 2;
-                        s.streamer->configure(*c, s.caps.decoders, rate, s.audio_target_channels.load());
+                        s.streamer->configure(*c, s.caps.decoders, rate, s.audio_target_channels.load(),
+                                              s.caps.supports_slices);
                     }
                     break;
-                case proto::MsgType::RequestKeyframe:
-                    s.streamer->request_keyframe();
+                case proto::MsgType::RequestKeyframe: {
+                    // Cuerpo opcional (1.3+): motivo. Sin cuerpo = el decodificador necesita un keyframe.
+                    const auto reason = r.remaining() >= 1 ? static_cast<proto::RecoveryReason>(r.u8())
+                                                           : proto::RecoveryReason::NeedKeyframe;
+                    s.streamer->request_recovery(reason);
                     break;
+                }
                 case proto::MsgType::Ping:
                     if (auto p = proto::PingPong::read(r)) {
                         p->host_time_us = gpu::now_us();

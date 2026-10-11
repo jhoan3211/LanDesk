@@ -42,6 +42,10 @@ struct StreamSettings {
     std::uint32_t audio_buffer_ms = 20;   // Colchón de reproducción del cliente (menos = menor latencia).
     std::uint32_t fec_percent = 15;
     bool low_latency = true;  // Codificador en preset rápido y búfer de 1 frame (menos calidad por bit).
+    // Recuperar pérdidas con intra-refresh en vez de keyframes. Apagado por defecto: medido con los
+    // decodificadores de Windows, un keyframe recupera antes (descartan cuadros durante la ola de refresco).
+    bool intra_refresh = false;
+    bool slices = true;         // Envío por slices: la red empieza antes de que termine de codificarse el cuadro.
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;
 };
