@@ -256,6 +256,11 @@ void App::draw_stream_overlay() {
             const auto paths = sys::pick_files(hwnd_);
             if (!paths.empty() && session_->files().connected()) session_->files().send(paths);
         }
+        if (const auto info = session_->host_info(); info && info->secure_desktop) {
+            ImGui::SameLine();
+            if (ImGui::Button("Ctrl+Alt+Supr")) send_secure_attention();
+            ImGui::SetItemTooltip("También con Ctrl+Alt+Fin");
+        }
         if (const auto info = session_->host_info()) {
             ImGui::TextUnformatted("Monitor:");
             for (const auto& m : info->monitors) {
@@ -276,7 +281,7 @@ void App::draw_stream_overlay() {
         draw_transfers(session_->files(), "##ovt");
         ImGui::TextColored(kMuted,
                            "Atajos: Ctrl+Alt+Shift + M menú · S estadísticas · F pantalla completa · 1-9 monitor · 0 todos · "
-                           "R mouse relativo · V solo ver · Q desconectar");
+                           "R mouse relativo · V solo ver · Q desconectar · Ctrl+Alt+Fin = Ctrl+Alt+Supr");
     }
     ImGui::End();
 }

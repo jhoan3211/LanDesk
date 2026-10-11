@@ -58,6 +58,7 @@ enum class MsgType : std::uint8_t {
     LatencyProbe = 31,  // Cliente -> host: mostrar el marcador en blanco/negro (id 0 = terminar).
     LatencyMark = 32,   // Host -> cliente: instante en que el marcador cambió y dónde está.
     StreamStopped = 33, // Host -> cliente: el stream secundario se detuvo (o no pudo iniciarse).
+    SecureAttention = 34, // Cliente -> host: Ctrl+Alt+Supr (solo con el host como servicio).
 
     // Canal de archivos
     FileHello = 40,
@@ -151,6 +152,7 @@ struct HostInfo {
     bool files_allowed = true;
     std::uint16_t media_port = 0;
     std::uint16_t file_port = 0;
+    bool secure_desktop = false;  // Opcional (1.3+): host como servicio (bloqueo, UAC, Ctrl+Alt+Supr).
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };

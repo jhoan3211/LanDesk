@@ -84,6 +84,9 @@ private:
 
 // DPAPI (ligado al usuario de Windows) para guardar secretos de emparejamiento en disco.
 [[nodiscard]] std::vector<std::uint8_t> protect(std::span<const std::uint8_t> data);
+// Ámbito de equipo para protect(): lo usan el servicio y su instalador (la carpeta de datos del servicio
+// solo es legible por SYSTEM y Administradores). Por defecto, ámbito del usuario actual.
+void set_machine_scope(bool machine);
 [[nodiscard]] platform::Result<std::vector<std::uint8_t>> unprotect(std::span<const std::uint8_t> data);
 
 }  // namespace lancast::crypto

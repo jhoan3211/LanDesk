@@ -28,6 +28,8 @@ add_executable(lancast WIN32
     src/ui_stream.cpp
     src/renderer.cpp
     src/second_window.cpp
+    src/app_service.cpp
+    src/agent.cpp
     res/lancast.rc
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
 set_target_properties(lancast PROPERTIES OUTPUT_NAME LanCast)

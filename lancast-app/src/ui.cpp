@@ -130,7 +130,10 @@ void App::draw_sidebar() {
 
     ImGui::SetCursorPosY(ImGui::GetWindowHeight() - 80 * scale_);
     ImGui::Separator();
-    if (st.listening) {
+    if (service_host_) {
+        ImGui::TextColored(kGood, "● Host como servicio");
+        ImGui::TextColored(kMuted, "También en bloqueo y UAC");
+    } else if (st.listening) {
         ImGui::TextColored(kGood, "● Aceptando conexiones");
         if (!st.addresses.empty()) ImGui::TextColored(kMuted, "%s", st.addresses.front().c_str());
     } else if (!settings_.host.enabled) {

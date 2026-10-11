@@ -5,6 +5,7 @@
 #include <dpapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <stdexcept>
 
 #include "win.hpp"
@@ -222,10 +223,17 @@ platform::Result<Key256> Ecdh::derive(std::span<const std::uint8_t, 64> remote) 
     return out;
 }
 
+namespace {
+std::atomic<bool> g_machine_scope{false};
+}  // namespace
+
+void set_machine_scope(bool machine) { g_machine_scope = machine; }
+
 std::vector<std::uint8_t> protect(std::span<const std::uint8_t> data) {
     DATA_BLOB in{static_cast<DWORD>(data.size()), const_cast<BYTE*>(data.data())};
     DATA_BLOB out{};
-    if (!CryptProtectData(&in, L"LanCast", nullptr, nullptr, nullptr, CRYPTPROTECT_UI_FORBIDDEN, &out)) return {};
+    const DWORD flags = CRYPTPROTECT_UI_FORBIDDEN | (g_machine_scope ? CRYPTPROTECT_LOCAL_MACHINE : 0);
+    if (!CryptProtectData(&in, L"LanCast", nullptr, nullptr, nullptr, flags, &out)) return {};
     std::vector<std::uint8_t> result(out.pbData, out.pbData + out.cbData);
     LocalFree(out.pbData);
     return result;

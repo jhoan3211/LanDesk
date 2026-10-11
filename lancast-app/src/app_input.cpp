@@ -56,6 +56,10 @@ bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
     const bool ctrl = mod_ctrl_[0] || mod_ctrl_[1];
     const bool alt = mod_alt_[0] || mod_alt_[1];
     const bool shift = mod_shift_[0] || mod_shift_[1];
+    if (ctrl && alt && !shift && k.vkCode == VK_END) {  // Como en Escritorio remoto: Ctrl+Alt+Fin = Ctrl+Alt+Supr.
+        if (down) send_secure_attention();
+        return true;
+    }
     if (ctrl && alt && shift) {
         const DWORD vk = k.vkCode;
         bool handled = true;

@@ -64,6 +64,8 @@ public:
     [[nodiscard]] Status status() const;
     void disconnect();
     void set_view_only(bool view_only);
+    // Agente del servicio de Windows: anuncia bloqueo/UAC y acepta Ctrl+Alt+Supr.
+    void set_service_mode(bool service_mode);
     void cancel_pairing();
 
     [[nodiscard]] std::vector<sys::PairedDevice> paired_clients() const;

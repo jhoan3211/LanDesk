@@ -5,6 +5,9 @@
 //   LanCast.exe --connect IP[:port]  Conecta al iniciar.
 //   LanCast.exe --no-host            Solo cliente (permite una segunda instancia en el mismo PC).
 //   LanCast.exe --list [--json]      Inventario de GPU, monitores y códecs en la consola.
+//   LanCast.exe --install-service    (Administrador) Instala el host como servicio de Windows.
+//   LanCast.exe --uninstall-service  (Administrador) Lo desinstala.
+//   LanCast.exe --service / --agent  Internos: proceso del servicio y agente en la sesión del usuario.
 
 #include <windows.h>
 #include <shellapi.h>
@@ -13,6 +16,7 @@
 #include <cstdio>
 #include <string>
 
+#include "agent.hpp"
 #include "app.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
@@ -20,6 +24,7 @@
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
 #include "lancast/platform/platform.hpp"
+#include "lancast/platform/service.hpp"
 #include "lancast/platform/system.hpp"
 
 namespace {
@@ -42,6 +47,17 @@ int run_list(bool json, bool verbose) {
     std::fwrite(text.data(), 1, text.size(), stdout);
     std::fflush(stdout);
     return report.gpus.empty() ? 1 : 0;
+}
+
+// --install-service / --uninstall-service (proceso elevado lanzado desde la interfaz).
+int run_service_setup(bool install) {
+    CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+    lancast::log::set_file(lancast::sys::app_data_dir() / L"service-install.log");
+    lancast::log::info("LanCast {}: {} el servicio", lancast::kAppVersion, install ? "instalando" : "desinstalando");
+    const auto r = install ? lancast::service::install() : lancast::service::uninstall();
+    if (!r) lancast::log::error("{}", r.error().message());
+    CoUninitialize();
+    return r ? 0 : 1;
 }
 
 }  // namespace
@@ -71,6 +87,16 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             opts.connect = narrow(argv[++i]);
         } else if (a == L"--pin" && i + 1 < argc) {
             opts.pin = narrow(argv[++i]);
+        } else if (a == L"--service") {
+            LocalFree(argv);
+            return lancast::service::run_service();
+        } else if (a == L"--agent") {
+            LocalFree(argv);
+            return lancast::app::run_agent();
+        } else if (a == L"--install-service" || a == L"--uninstall-service") {
+            const bool install = a == L"--install-service";
+            LocalFree(argv);
+            return run_service_setup(install);
         }
     }
     LocalFree(argv);

@@ -118,6 +118,7 @@ void HostInfo::write(ByteWriter& w) const {
     write_codecs(w, encoders);
     w.boolean(audio_available).boolean(input_allowed).boolean(clipboard_allowed).boolean(files_allowed);
     w.u16(media_port).u16(file_port);
+    w.boolean(secure_desktop);
 }
 
 std::optional<HostInfo> HostInfo::read(ByteReader& r) {
@@ -141,6 +142,7 @@ std::optional<HostInfo> HostInfo::read(ByteReader& r) {
     h.files_allowed = r.boolean();
     h.media_port = r.u16();
     h.file_port = r.u16();
+    if (r.remaining() >= 1) h.secure_desktop = r.boolean();
     return finish(r, std::move(h));
 }
 

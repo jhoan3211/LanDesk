@@ -18,6 +18,7 @@
 #include "lancast/core/settings.hpp"
 #include "lancast/host/host_service.hpp"
 #include "lancast/platform/d3d.hpp"
+#include "lancast/platform/service.hpp"
 #include "lancast/platform/system.hpp"
 #include "lancast/platform/updater.hpp"
 #include "renderer.hpp"
@@ -94,6 +95,12 @@ private:
     void draw_connect_page();
     void draw_stream_settings(bool live);
     void draw_host_page();
+    void draw_service_section();
+    [[nodiscard]] AppSettings effective_host_settings() const;
+    void refresh_service_status();
+    void start_service_action(bool install);
+    void poll_service_action();
+    void send_secure_attention();
     void draw_files_page();
     void draw_transfers(files::Manager& manager, const char* id);
     void draw_settings_page();
@@ -180,6 +187,16 @@ private:
     bool update_dismissed_ = false;
     std::atomic<bool> update_cancel_{false};
     std::thread update_thread_;
+
+    // Host como servicio de Windows (instalación elevada en un hilo propio).
+    bool service_host_ = false;
+    bool service_outdated_ = false;
+    service::Status service_status_;
+    std::atomic<bool> service_busy_{false};
+    std::mutex service_mutex_;
+    std::optional<std::string> service_message_;
+    std::thread service_thread_;
+    std::uint64_t service_checked_us_ = 0;
 
     // Segunda ventana (otro monitor del host en paralelo).
     std::unique_ptr<SecondWindow> second_;

@@ -19,6 +19,7 @@
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
 #include "lancast/platform/platform.hpp"
+#include "lancast/platform/service.hpp"
 #include "lancast/platform/session_crypto.hpp"
 #include "streamer.hpp"
 
@@ -76,6 +77,7 @@ struct Session {
 };
 
 struct HostService::Impl {
+    std::atomic<bool> service_mode{false};
     HostService& owner;
     mutable std::mutex mutex;
     AppSettings settings;
@@ -515,6 +517,7 @@ struct HostService::Impl {
         info.input_allowed = hs.allow_input && !s.view_only;
         info.clipboard_allowed = hs.allow_clipboard;
         info.files_allowed = hs.allow_files;
+        info.secure_desktop = service_mode;
         info.media_port = hs.media_port;
         info.file_port = static_cast<std::uint16_t>(hs.control_port + 1);
         s.channel->send(proto::encode(proto::MsgType::HostInfo, info));
@@ -692,6 +695,14 @@ struct HostService::Impl {
                 case proto::MsgType::ReleaseAll:
                     s.injector.release_all();
                     break;
+                case proto::MsgType::SecureAttention:
+                    if (!control) break;
+                    if (service_mode && service::request_secure_attention()) {
+                        log::info("Ctrl+Alt+Supr pedido por {}", s.client_name);
+                    } else {
+                        log::warn("Ctrl+Alt+Supr solo funciona con el host instalado como servicio");
+                    }
+                    break;
                 case proto::MsgType::Clipboard:
                     if (auto t = proto::TextMessage::read(r); t && cur.allow_clipboard && owner.hwnd_ != nullptr) {
                         {
@@ -777,6 +788,8 @@ void HostService::disconnect() {
         s->channel->shutdown();
     }
 }
+
+void HostService::set_service_mode(bool service_mode) { impl_->service_mode = service_mode; }
 
 void HostService::set_view_only(bool view_only) {
     std::shared_ptr<Session> s;

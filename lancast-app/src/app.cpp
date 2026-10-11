@@ -107,6 +107,7 @@ App::~App() {
     if (discovery_thread_.joinable()) discovery_thread_.join();
     update_cancel_ = true;
     if (update_thread_.joinable()) update_thread_.join();
+    if (service_thread_.joinable()) service_thread_.join();
     disconnect_client();
     host_.stop();
     if (keyboard_hook_ != nullptr) UnhookWindowsHookEx(keyboard_hook_);
@@ -275,7 +276,8 @@ int App::run() {
     apply_dpi(GetDpiForWindow(hwnd_));
 
     create_tray();
-    host_.start(settings_);
+    refresh_service_status();
+    host_.start(effective_host_settings());
     report_ = platform::collect_system_report();
 
     ShowWindow(hwnd_, options_.minimized ? SW_HIDE : SW_SHOW);
@@ -364,8 +366,13 @@ int App::run() {
         }
         if (settings_dirty_ && now - settings_dirty_since_ > 1'000'000) {
             sys::save_settings(settings_);
-            host_.apply_settings(settings_);
+            host_.apply_settings(effective_host_settings());
             settings_dirty_ = false;
+        }
+        poll_service_action();
+        if (!service_busy_ && now - service_checked_us_ > 5'000'000) {
+            service_checked_us_ = now;
+            refresh_service_status();
         }
         if (visible) render();
         if (second_) second_->render();

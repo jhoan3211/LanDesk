@@ -349,4 +349,15 @@ void App::close_second_window() {
     second_monitor_id_ = 0;
 }
 
+void App::send_secure_attention() {
+    if (!session_ || session_->state() != client::State::Connected || !control_enabled()) return;
+    const auto info = session_->host_info();
+    if (!info || !info->secure_desktop) {
+        toast("Ctrl+Alt+Supr requiere instalar LanCast como servicio en el otro equipo (Este equipo → Servicio de Windows)");
+        return;
+    }
+    session_->send_message(proto::encode(proto::MsgType::SecureAttention));
+    toast("Ctrl+Alt+Supr enviado");
+}
+
 }  // namespace lancast::app

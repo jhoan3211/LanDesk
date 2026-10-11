@@ -178,3 +178,27 @@ TEST(Protocol, StreamStartedOptionalFieldsRoundtrip) {
     EXPECT_TRUE(out.slices);
     EXPECT_EQ(out.encoder_backend, "AMF directo");
 }
+
+TEST(Protocol, HostInfoSecureDesktopIsOptional) {
+    HostInfo h;
+    h.host_name = "Servicio";
+    h.secure_desktop = true;
+    EXPECT_TRUE(roundtrip(h).secure_desktop);
+
+    // Un host 1.2 no envía el campo: el cliente no debe ofrecer Ctrl+Alt+Supr.
+    ByteWriter w;
+    h.write(w);
+    std::vector<std::uint8_t> old_bytes = w.take();
+    old_bytes.pop_back();
+    ByteReader r(old_bytes);
+    const auto out = HostInfo::read(r);
+    ASSERT_TRUE(out.has_value());
+    EXPECT_FALSE(out->secure_desktop);
+    EXPECT_EQ(out->host_name, "Servicio");
+}
+
+TEST(Protocol, SecureAttentionHasNoBody) {
+    const auto bytes = encode(MsgType::SecureAttention);
+    ASSERT_EQ(bytes.size(), 1u);
+    EXPECT_EQ(bytes[0], 34);
+}

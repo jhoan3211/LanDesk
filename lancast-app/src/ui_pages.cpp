@@ -394,11 +394,16 @@ void App::draw_host_page() {
     ImGui::PopFont();
     ImGui::TextColored(kMuted, "Permite que otros equipos de tu red vean y controlen esta pantalla.");
 
+    if (service_host_) {
+        draw_service_section();
+        return;
+    }
+
     bool enabled = settings_.host.enabled;
     if (ImGui::Checkbox("Permitir conexiones a este equipo", &enabled)) {
         settings_.host.enabled = enabled;
         sys::save_settings(settings_);
-        host_.apply_settings(settings_);
+        host_.apply_settings(effective_host_settings());
     }
 
     if (st.pin) {
@@ -474,6 +479,8 @@ void App::draw_host_page() {
         if (ImGui::SmallButton("Olvidar")) host_.revoke(d.id_hex);
         ImGui::PopID();
     }
+
+    draw_service_section();
 }
 
 // ------------------------------------------------------------------------------------------------ archivos

@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "lancast/core/log.hpp"
+#include "lancast/platform/desktop.hpp"
 #include "win.hpp"
 
 namespace lancast::capture {
@@ -47,6 +48,8 @@ platform::Result<std::unique_ptr<DesktopCapture>> DesktopCapture::create(const g
 
 platform::Result<void> DesktopCapture::init_outputs() {
     outputs_.clear();
+    // Como servicio (SYSTEM): seguir a la pantalla de bloqueo / UAC. Para un usuario normal no hace nada.
+    desk::attach_to_input_desktop();
     gpu::ComPtr<IDXGIOutput> output;
     for (UINT i = 0; device_.adapter->EnumOutputs(i, &output) != DXGI_ERROR_NOT_FOUND; ++i, output.Reset()) {
         DXGI_OUTPUT_DESC desc{};

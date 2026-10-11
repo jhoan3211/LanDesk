@@ -6,10 +6,22 @@
 
 #include "win.hpp"
 
+#include "lancast/platform/desktop.hpp"
+
 namespace lancast::input {
 namespace {
 
-void send(INPUT& in) { SendInput(1, &in, sizeof(INPUT)); }
+// Si el escritorio de entrada cambió (bloqueo, UAC) y somos SYSTEM, el hilo se mueve a él y se reintenta.
+// Además se revisa cada 250 ms: SendInput no siempre informa el fallo cuando el escritorio es otro.
+void send(INPUT& in) {
+    thread_local ULONGLONG next_check = 0;
+    const ULONGLONG now = GetTickCount64();
+    if (now >= next_check) {
+        next_check = now + 250;
+        desk::attach_to_input_desktop();
+    }
+    if (SendInput(1, &in, sizeof(INPUT)) == 0 && desk::attach_to_input_desktop()) SendInput(1, &in, sizeof(INPUT));
+}
 
 DWORD button_flag(proto::MouseButtonId b, bool down, DWORD& data) {
     data = 0;
