@@ -20,7 +20,12 @@ target_link_libraries(imgui PUBLIC d3d11 d3dcompiler dxgi dwmapi)
 add_executable(lancast WIN32
     src/main.cpp
     src/app.cpp
+    src/app_tray.cpp
+    src/app_client.cpp
+    src/app_input.cpp
     src/ui.cpp
+    src/ui_pages.cpp
+    src/ui_stream.cpp
     src/renderer.cpp
     res/lancast.rc
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)

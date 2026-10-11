@@ -1,4 +1,4 @@
-﻿# Capa de plataforma Windows compartida por host y cliente.
+# Capa de plataforma Windows compartida por host y cliente.
 add_library(lancast_platform STATIC
     src/com.cpp
     src/strings.cpp

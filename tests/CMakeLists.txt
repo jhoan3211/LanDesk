@@ -1,4 +1,4 @@
-﻿include(FetchContent)
+include(FetchContent)
 
 # GoogleTest fijado a una versión exacta. gtest_force_shared_crt alinea el runtime con el resto del proyecto.
 set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)

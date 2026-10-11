@@ -1,4 +1,4 @@
-﻿// Prueba de extremo a extremo: host y cliente reales sobre loopback (captura, codificación, FEC, cifrado,
+// Prueba de extremo a extremo: host y cliente reales sobre loopback (captura, codificación, FEC, cifrado,
 // decodificación, emparejamiento con PIN, reconexión emparejada, archivos y rechazo de PIN incorrecto).
 
 #include <gtest/gtest.h>

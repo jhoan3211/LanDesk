@@ -1,4 +1,4 @@
-﻿// LanCast.exe: un único ejecutable que es host y cliente a la vez.
+// LanCast.exe: un único ejecutable que es host y cliente a la vez.
 //
 //   LanCast.exe                      Abre la interfaz.
 //   LanCast.exe --minimized          Arranca oculto en la bandeja (inicio automático).
