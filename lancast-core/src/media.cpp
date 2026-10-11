@@ -131,6 +131,7 @@ void packetize_frame(std::span<const std::uint8_t> frame, const EncodedFrameInfo
 void FrameAssembler::reset() {
     frames_.clear();
     last_completed_.reset();
+    has_epoch_ = false;
     pending_lost_ = 0;
 }
 
@@ -205,6 +206,10 @@ std::optional<AssembledFrame> FrameAssembler::add(const VideoShardHeader& h, std
     for (const Block& b : frame.blocks) {
         out.data.insert(out.data.end(), b.buffer.begin(),
                         b.buffer.begin() + static_cast<std::ptrdiff_t>(static_cast<std::size_t>(b.k) * kShardSize));
+    }
+    if (out.data.size() < frame.header.frame_size) {  // Cabecera incoherente: faltan datos para el tamaño anunciado.
+        frames_.erase(it);
+        return std::nullopt;
     }
     out.data.resize(frame.header.frame_size);
     out.info.frame_id = frame.header.frame_id;
