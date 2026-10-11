@@ -127,6 +127,8 @@ void App::start_connect(const std::string& address) {
 }
 
 void App::disconnect_client(bool keep_view) {
+    second_.reset();
+    second_monitor_id_ = 0;
     if (keyboard_hook_ != nullptr) {
         UnhookWindowsHookEx(keyboard_hook_);
         keyboard_hook_ = nullptr;
@@ -282,6 +284,17 @@ void App::process_client() {
     }
     if (st != client::State::Connected) return;
 
+    if (second_) {
+        if (second_->closed_by_user()) {
+            close_second_window();
+        } else if (auto err = session_->take_second_stream_error()) {
+            toast("Segunda ventana: " + *err);
+            close_second_window();
+        } else if (const auto s2 = session_->stream(1)) {
+            second_->set_title(detail::widen(std::format("LanCast · {} · monitor {} ({}x{} @ {} fps)", session_->host_name(),
+                                                         s2->monitor_id, s2->width, s2->height, s2->fps)));
+        }
+    }
     if (auto shape = session_->take_cursor_shape()) {
         if (remote_cursor_ != nullptr) DestroyCursor(remote_cursor_);
         remote_cursor_ = input::create_cursor(*shape);
@@ -300,6 +313,40 @@ void App::process_client() {
     }
     session_->set_simulated_loss(settings_.client.simulate_loss_percent);
     session_->set_audio_output(settings_.client.stream.audio_volume, settings_.client.stream.audio_buffer_ms);
+}
+
+void App::open_second_window(std::uint32_t monitor_id) {
+    if (!session_ || !streaming()) return;
+    close_second_window();
+    SecondWindow::Hooks hooks;
+    hooks.control_enabled = [this] { return control_enabled(); };
+    hooks.remote_cursor = [this] { return remote_cursor_; };
+    second_ = std::make_unique<SecondWindow>(device_, *session_, std::move(hooks));
+    if (!second_->open(detail::widen(std::format("LanCast · {} · monitor {}", session_->host_name(), monitor_id)),
+                       MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST))) {
+        second_.reset();
+        toast("No se pudo abrir la segunda ventana");
+        return;
+    }
+    // Pedir el stream con la resolución del monitor donde quedó la ventana.
+    proto::StreamConfig c = make_stream_config();
+    MONITORINFO mi{sizeof(mi)};
+    GetMonitorInfoW(MonitorFromWindow(second_->hwnd(), MONITOR_DEFAULTTONEAREST), &mi);
+    c.max_width = static_cast<std::uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left);
+    c.max_height = static_cast<std::uint32_t>(mi.rcMonitor.bottom - mi.rcMonitor.top);
+    c.stream_index = 1;
+    c.monitor_id = monitor_id;
+    c.audio = false;
+    session_->request_stream(c);
+    second_monitor_id_ = monitor_id;
+    toast(std::format("Monitor {} abierto en otra ventana (doble clic o F11: pantalla completa)", monitor_id));
+}
+
+void App::close_second_window() {
+    if (!second_) return;
+    if (session_ && session_->state() == client::State::Connected) session_->stop_second_stream();
+    second_.reset();
+    second_monitor_id_ = 0;
 }
 
 }  // namespace lancast::app

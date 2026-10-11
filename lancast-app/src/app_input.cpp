@@ -51,7 +51,8 @@ bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
         default:
             break;
     }
-    if (!streaming() || GetForegroundWindow() != hwnd_) return false;
+    const HWND fg = GetForegroundWindow();
+    if (!streaming() || (fg != hwnd_ && !(second_ && fg == second_->hwnd()))) return false;
     const bool ctrl = mod_ctrl_[0] || mod_ctrl_[1];
     const bool alt = mod_alt_[0] || mod_alt_[1];
     const bool shift = mod_shift_[0] || mod_shift_[1];

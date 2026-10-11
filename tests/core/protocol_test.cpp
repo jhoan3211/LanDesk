@@ -157,13 +157,15 @@ TEST(Protocol, StreamConfigFromOlderClientHasNewFeaturesOff) {
     ByteWriter w;
     c.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 2);  // Sin los dos booleanos de la 1.3.
+    old_bytes.resize(old_bytes.size() - 4);  // Sin los campos de la 1.3 (intra_refresh, slices, stream_index, enabled).
     ByteReader r(old_bytes);
     const auto out = StreamConfig::read(r);
     ASSERT_TRUE(out.has_value());
     EXPECT_FALSE(out->intra_refresh);
     EXPECT_FALSE(out->slices);
     EXPECT_TRUE(out->low_latency);
+    EXPECT_EQ(out->stream_index, 0);
+    EXPECT_TRUE(out->enabled);
 }
 
 TEST(Protocol, StreamStartedOptionalFieldsRoundtrip) {

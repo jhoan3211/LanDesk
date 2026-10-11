@@ -4,6 +4,7 @@
 // sincronización de reloj, audio y archivos. La decodificación y presentación las hace la interfaz
 // (mismo hilo que la swapchain) con los frames que entrega `take_frames()`.
 
+#include <array>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -92,20 +93,23 @@ public:
     [[nodiscard]] std::string host_name() const;
     [[nodiscard]] net::Endpoint host_endpoint() const;
     [[nodiscard]] std::optional<proto::HostInfo> host_info() const;
-    [[nodiscard]] std::optional<proto::StreamStarted> stream() const;
+    // index 0 = stream principal, 1 = segunda ventana (otro monitor del host).
+    [[nodiscard]] std::optional<proto::StreamStarted> stream(int index = 0) const;
 
-    void request_stream(const proto::StreamConfig& config);
-    void request_keyframe();
+    void request_stream(const proto::StreamConfig& config);  // config.stream_index elige el stream.
+    void stop_second_stream();
+    [[nodiscard]] std::optional<std::string> take_second_stream_error();
+    void request_keyframe(int index = 0);
     // FrameLoss: el host repara con intra-refresh si el stream lo usa; NeedKeyframe: keyframe completo.
-    void request_recovery(proto::RecoveryReason reason);
+    void request_recovery(proto::RecoveryReason reason, int index = 0);
     void send_message(const std::vector<std::uint8_t>& encoded);
 
     // Frames completos en orden (todos: los P-frames dependen de los anteriores).
-    [[nodiscard]] std::vector<Frame> take_frames();
-    [[nodiscard]] void* frame_event() const noexcept { return frame_event_; }
+    [[nodiscard]] std::vector<Frame> take_frames(int index = 0);
+    [[nodiscard]] void* frame_event(int index = 0) const noexcept { return slots_[static_cast<std::size_t>(index)].event; }
 
     [[nodiscard]] std::optional<proto::CursorShape> take_cursor_shape();
-    [[nodiscard]] proto::CursorPos cursor() const;
+    [[nodiscard]] proto::CursorPos cursor(int index = 0) const;
     [[nodiscard]] std::optional<std::string> take_clipboard();
 
     // La interfaz informa los tiempos de decodificación/presentación de cada frame.
@@ -153,22 +157,28 @@ private:
     std::array<std::uint8_t, 32> media_tx_key_{};
     std::uint16_t media_port_ = 0;
     std::optional<proto::HostInfo> host_info_;
-    std::optional<proto::StreamStarted> stream_;
 
-    // Video
-    media::FrameAssembler assembler_;
-    media::SliceJoiner joiner_;
-    std::uint64_t slice_frames_lost_ = 0;
-    std::deque<Frame> frames_;
-    void* frame_event_ = nullptr;
-    bool waiting_keyframe_ = true;
-    std::uint64_t last_idr_request_us_ = 0;
-    std::uint64_t last_frame_us_ = 0;
+    // Video: un "slot" por stream (principal y segunda ventana). Campos protegidos por mutex_, salvo el
+    // ensamblador y el unidor de slices, que solo usa el hilo de medios.
+    struct StreamSlot {
+        std::optional<proto::StreamStarted> info;
+        media::FrameAssembler assembler;
+        media::SliceJoiner joiner;
+        std::uint64_t slice_frames_lost = 0;
+        std::deque<Frame> frames;
+        void* event = nullptr;
+        bool waiting_keyframe = true;
+        std::uint64_t last_idr_request_us = 0;
+        std::uint64_t last_frame_us = 0;
+        proto::CursorPos cursor;
+    };
+    std::array<StreamSlot, 2> slots_;
+    static void reset_slot(StreamSlot& slot);
+    std::optional<std::string> second_error_;
     std::atomic<std::uint32_t> simulated_loss_{0};
 
     // Cursor y portapapeles
     std::optional<proto::CursorShape> cursor_shape_;
-    proto::CursorPos cursor_pos_;
     std::optional<std::string> clipboard_;
 
     // Audio

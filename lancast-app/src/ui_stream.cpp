@@ -168,6 +168,8 @@ void App::draw_stream_toolbar() {
     }
 
     ImGui::SameLine();
+    draw_second_window_controls();
+    ImGui::SameLine();
     if (primary_button("Latencia mínima")) apply_min_latency();
     ImGui::SetItemTooltip("FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa");
     ImGui::SameLine();
@@ -265,6 +267,8 @@ void App::draw_stream_overlay() {
             }
             ImGui::SameLine();
             if (ImGui::Button("Todos")) switch_monitor(0);
+            ImGui::SameLine();
+            draw_second_window_controls();
         }
         ImGui::Separator();
         draw_stream_settings(true);
@@ -380,6 +384,27 @@ void App::draw_reconnect_overlay() {
                 reconnect_attempts_, left);
     if (ImGui::Button("Cancelar")) disconnect_client();
     ImGui::End();
+}
+
+void App::draw_second_window_controls() {
+    if (second_) {
+        if (ImGui::Button(std::format("Cerrar ventana del monitor {}", second_monitor_id_).c_str())) close_second_window();
+        return;
+    }
+    const auto info = session_->host_info();
+    const auto stream = session_->stream();
+    if (!info || info->monitors.size() < 2) return;
+    ImGui::SetNextItemWidth(190 * scale_);
+    if (ImGui::BeginCombo("##second", "Abrir otro monitor…")) {
+        for (const auto& m : info->monitors) {
+            if (stream && (stream->monitor_id == m.id || stream->monitor_id == 0)) continue;
+            if (ImGui::Selectable(std::format("{}: {} ({}x{})", m.id, m.name, m.rect.width, m.rect.height).c_str())) {
+                open_second_window(m.id);
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Muestra otro monitor del host en una segunda ventana (o en tu segundo monitor)");
 }
 
 }  // namespace lancast::app

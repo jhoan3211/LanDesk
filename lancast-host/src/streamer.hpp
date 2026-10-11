@@ -28,7 +28,7 @@ public:
         std::function<void(const proto::CursorPos&)> cursor_pos;
     };
 
-    Streamer(net::MediaSender& sender, Callbacks callbacks);
+    Streamer(net::MediaSender& sender, Callbacks callbacks, std::uint8_t stream_index = 0);
     ~Streamer();
     Streamer(const Streamer&) = delete;
     Streamer& operator=(const Streamer&) = delete;
@@ -64,6 +64,7 @@ private:
 
     net::MediaSender& sender_;
     Callbacks callbacks_;
+    std::uint8_t stream_index_ = 0;
     std::thread thread_;
     std::atomic<bool> running_{true};
     std::atomic<bool> keyframe_requested_{true};

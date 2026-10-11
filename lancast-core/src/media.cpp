@@ -99,7 +99,8 @@ void packetize_frame(std::span<const std::uint8_t> frame, const EncodedFrameInfo
             h.shard_index = static_cast<std::uint8_t>(shard);
             h.data_shards = static_cast<std::uint8_t>(k);
             h.parity_shards = static_cast<std::uint8_t>(m);
-            h.flags = static_cast<std::uint8_t>((info.keyframe ? kFrameFlagKeyframe : 0) | (info.slice ? kFrameFlagSlice : 0));
+            h.flags = static_cast<std::uint8_t>((info.keyframe ? kFrameFlagKeyframe : 0) | (info.slice ? kFrameFlagSlice : 0) |
+                                                (info.stream_index == 1 ? kFrameFlagStream1 : 0));
             h.reserved = info.slice ? static_cast<std::uint16_t>(info.slice_index | (info.last_slice ? kSliceLast : 0)) : 0;
             h.frame_size = static_cast<std::uint32_t>(frame.size());
             h.capture_time_us = info.capture_time_us;
@@ -212,6 +213,7 @@ std::optional<AssembledFrame> FrameAssembler::add(const VideoShardHeader& h, std
     out.info.encode_time_us = frame.header.encode_time_us;
     out.info.epoch = frame.header.epoch;
     out.info.slice = (frame.header.flags & kFrameFlagSlice) != 0;
+    out.info.stream_index = (frame.header.flags & kFrameFlagStream1) != 0 ? 1 : 0;
     out.info.slice_index = static_cast<std::uint8_t>(frame.header.reserved & 0xFF);
     out.info.last_slice = !out.info.slice || (frame.header.reserved & kSliceLast) != 0;
     out.recovered_by_fec = frame.used_parity;

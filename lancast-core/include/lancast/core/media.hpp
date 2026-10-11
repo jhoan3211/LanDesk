@@ -45,6 +45,8 @@ inline constexpr std::uint8_t kFrameFlagKeyframe = 0x01;
 // lleva el índice del slice y si es el último del cuadro.
 inline constexpr std::uint8_t kFrameFlagSlice = 0x02;
 inline constexpr std::uint16_t kSliceLast = 0x8000;
+// Segundo stream (segunda ventana): mismo socket, fragmentos marcados con esta bandera.
+inline constexpr std::uint8_t kFrameFlagStream1 = 0x04;
 
 struct VideoShardHeader {
     std::uint32_t frame_id = 0;
@@ -71,6 +73,7 @@ struct EncodedFrameInfo {
     std::uint32_t encode_time_us = 0;
     std::uint16_t epoch = 0;
     bool slice = false;         // Unidad parcial de un cuadro (modo slices).
+    std::uint8_t stream_index = 0;
     std::uint8_t slice_index = 0;
     bool last_slice = true;
 };

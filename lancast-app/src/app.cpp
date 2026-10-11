@@ -286,11 +286,16 @@ int App::run() {
 
     std::uint64_t last_host_poll = 0;
     while (running_) {
-        HANDLE ev = session_ ? static_cast<HANDLE>(session_->frame_event()) : nullptr;
+        HANDLE events[2]{};
+        DWORD event_count = 0;
+        if (session_) {
+            events[event_count++] = static_cast<HANDLE>(session_->frame_event(0));
+            if (second_) events[event_count++] = static_cast<HANDLE>(session_->frame_event(1));
+        }
         const bool visible = IsWindowVisible(hwnd_) && !IsIconic(hwnd_);
         DWORD timeout = 16;
-        if (!visible) timeout = 200;
-        MsgWaitForMultipleObjectsEx(ev ? 1 : 0, ev ? &ev : nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
+        if (!visible && !second_) timeout = 200;
+        MsgWaitForMultipleObjectsEx(event_count, event_count ? events : nullptr, timeout, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
 
         MSG m;
         while (PeekMessageW(&m, nullptr, 0, 0, PM_REMOVE)) {
@@ -363,6 +368,7 @@ int App::run() {
             settings_dirty_ = false;
         }
         if (visible) render();
+        if (second_) second_->render();
     }
     if (settings_dirty_) sys::save_settings(settings_);
     return 0;

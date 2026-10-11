@@ -57,6 +57,7 @@ enum class MsgType : std::uint8_t {
     Disconnect = 30,
     LatencyProbe = 31,  // Cliente -> host: mostrar el marcador en blanco/negro (id 0 = terminar).
     LatencyMark = 32,   // Host -> cliente: instante en que el marcador cambió y dónde está.
+    StreamStopped = 33, // Host -> cliente: el stream secundario se detuvo (o no pudo iniciarse).
 
     // Canal de archivos
     FileHello = 40,
@@ -172,6 +173,8 @@ struct StreamConfig {
     bool low_latency = true;          // Opcional (1.2+): preset rápido del codificador.
     bool intra_refresh = false;       // Opcional (1.3+): recuperar pérdidas con intra-refresh.
     bool slices = true;               // Opcional (1.3+): envío por slices (sub-frame).
+    std::uint8_t stream_index = 0;    // Opcional (1.3+): 0 = principal, 1 = segunda ventana.
+    bool enabled = true;              // Opcional (1.3+): false = detener ese stream.
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };
@@ -191,6 +194,7 @@ struct StreamStarted {
     bool intra_refresh = false;   // Opcional (1.3+): el cliente puede seguir decodificando tras una pérdida.
     bool slices = false;          // Opcional (1.3+): los frames llegan por slices.
     std::string encoder_backend;  // Opcional (1.3+): "AMF directo", "NVENC directo", "Media Foundation".
+    std::uint8_t stream_index = 0;  // Opcional (1.3+).
     void write(ByteWriter& w) const;
     static std::optional<StreamStarted> read(ByteReader& r);
 };
@@ -223,9 +227,11 @@ struct PingPong {
 struct MouseAbs {
     float x = 0;  // Normalizado [0,1] en el stream.
     float y = 0;
-    void write(ByteWriter& w) const { w.f32(x).f32(y); }
+    std::uint8_t stream_index = 0;  // Opcional (1.3+): en qué stream están las coordenadas.
+    void write(ByteWriter& w) const { w.f32(x).f32(y).u8(stream_index); }
     static std::optional<MouseAbs> read(ByteReader& r) {
         MouseAbs m{r.f32(), r.f32()};
+        if (r.ok() && r.remaining() >= 1) m.stream_index = r.u8();
         return r.ok() ? std::optional{m} : std::nullopt;
     }
 };
@@ -291,10 +297,24 @@ struct CursorPos {
     bool visible = false;
     float x = 0;  // Normalizado en el stream.
     float y = 0;
-    void write(ByteWriter& w) const { w.boolean(visible).f32(x).f32(y); }
+    std::uint8_t stream_index = 0;  // Opcional (1.3+).
+    void write(ByteWriter& w) const { w.boolean(visible).f32(x).f32(y).u8(stream_index); }
     static std::optional<CursorPos> read(ByteReader& r) {
         CursorPos c{r.boolean(), r.f32(), r.f32()};
+        if (r.ok() && r.remaining() >= 1) c.stream_index = r.u8();
         return r.ok() ? std::optional{c} : std::nullopt;
+    }
+};
+
+struct StreamStoppedMsg {
+    std::uint8_t stream_index = 1;
+    std::string reason;
+    void write(ByteWriter& w) const { w.u8(stream_index).str(reason); }
+    static std::optional<StreamStoppedMsg> read(ByteReader& r) {
+        StreamStoppedMsg m;
+        m.stream_index = r.u8();
+        m.reason = r.str(4096);
+        return r.ok() ? std::optional{std::move(m)} : std::nullopt;
     }
 };
 

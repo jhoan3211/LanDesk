@@ -89,7 +89,7 @@ std::vector<DiscoveredHost> discover_hosts(std::uint32_t timeout_ms) {
 }
 
 ClientSession::ClientSession(const AppSettings& settings) : settings_(settings) {
-    frame_event_ = CreateEventW(nullptr, FALSE, FALSE, nullptr);
+    for (auto& slot : slots_) slot.event = CreateEventW(nullptr, FALSE, FALSE, nullptr);
     files_.set_receive_dir(settings.client.receive_folder.empty() ? sys::default_receive_dir()
                                                                   : std::filesystem::path{std::u8string{
                                                                         settings.client.receive_folder.begin(),
@@ -99,7 +99,9 @@ ClientSession::ClientSession(const AppSettings& settings) : settings_(settings) 
 
 ClientSession::~ClientSession() {
     disconnect();
-    if (frame_event_ != nullptr) CloseHandle(frame_event_);
+    for (auto& slot : slots_) {
+        if (slot.event != nullptr) CloseHandle(slot.event);
+    }
 }
 
 void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& caps, const proto::StreamConfig& initial) {
@@ -113,11 +115,9 @@ void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& 
         state_ = State::Connecting;
         message_.clear();
         host_info_.reset();
-        stream_.reset();
         pin_.reset();
-        frames_.clear();
-        assembler_.reset();
-        waiting_keyframe_ = true;
+        for (auto& slot : slots_) reset_slot(slot);
+        second_error_.reset();
         stats_ = Stats{};
         best_rtt_us_ = 1e12;
     }
@@ -175,9 +175,35 @@ std::optional<proto::HostInfo> ClientSession::host_info() const {
     return host_info_;
 }
 
-std::optional<proto::StreamStarted> ClientSession::stream() const {
+std::optional<proto::StreamStarted> ClientSession::stream(int index) const {
     std::scoped_lock lock(mutex_);
-    return stream_;
+    return slots_[static_cast<std::size_t>(index)].info;
+}
+
+void ClientSession::reset_slot(StreamSlot& slot) {
+    slot.info.reset();
+    slot.frames.clear();
+    slot.assembler.reset();
+    slot.joiner.reset();
+    slot.waiting_keyframe = true;
+    slot.last_frame_us = 0;
+    slot.cursor = proto::CursorPos{};
+}
+
+void ClientSession::stop_second_stream() {
+    proto::StreamConfig off;
+    off.stream_index = 1;
+    off.enabled = false;
+    send_message(proto::encode(proto::MsgType::StreamConfig, off));
+    std::scoped_lock lock(mutex_);
+    reset_slot(slots_[1]);
+}
+
+std::optional<std::string> ClientSession::take_second_stream_error() {
+    std::scoped_lock lock(mutex_);
+    auto out = std::move(second_error_);
+    second_error_.reset();
+    return out;
 }
 
 void ClientSession::set_state(State s, std::string msg) {
@@ -201,19 +227,21 @@ void ClientSession::request_stream(const proto::StreamConfig& config) {
     send_message(proto::encode(proto::MsgType::StreamConfig, config));
 }
 
-void ClientSession::request_keyframe() { request_recovery(proto::RecoveryReason::NeedKeyframe); }
+void ClientSession::request_keyframe(int index) { request_recovery(proto::RecoveryReason::NeedKeyframe, index); }
 
-void ClientSession::request_recovery(proto::RecoveryReason reason) {
+void ClientSession::request_recovery(proto::RecoveryReason reason, int index) {
+    StreamSlot& slot = slots_[static_cast<std::size_t>(index)];
     const std::uint64_t now = gpu::now_us();
     // Una ola de intra-refresh dura unos pocos frames: no tiene sentido pedir otra enseguida.
     const std::uint64_t min_gap = reason == proto::RecoveryReason::FrameLoss ? 300'000 : 30'000;
     {
         std::scoped_lock lock(mutex_);
-        if (now - last_idr_request_us_ < min_gap) return;
-        last_idr_request_us_ = now;
+        if (now - slot.last_idr_request_us < min_gap) return;
+        slot.last_idr_request_us = now;
         ++stats_.keyframe_requests;
     }
-    send_message({static_cast<std::uint8_t>(proto::MsgType::RequestKeyframe), static_cast<std::uint8_t>(reason)});
+    send_message({static_cast<std::uint8_t>(proto::MsgType::RequestKeyframe), static_cast<std::uint8_t>(reason),
+                  static_cast<std::uint8_t>(index)});
 }
 
 bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host) {
@@ -390,7 +418,12 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                 }
                 break;
             case proto::MsgType::StreamStarted:
-                if (auto s = proto::StreamStarted::read(r)) {
+                if (auto s = proto::StreamStarted::read(r); s && s->stream_index == 1) {
+                    log::info("Segundo stream: {} {}x{} @ {} fps", lancast::to_string(s->codec), s->width, s->height, s->fps);
+                    std::scoped_lock lock(mutex_);
+                    slots_[1].info = std::move(*s);
+                    slots_[1].waiting_keyframe = true;
+                } else if (s) {
                     log::info("Stream: {} {}x{} @ {} fps, {} Mbps{}", lancast::to_string(s->codec), s->width, s->height, s->fps,
                               s->bitrate_kbps / 1000, s->notes.empty() ? "" : " — " + s->notes);
                     const audio::Format fmt{s->audio_rate, s->audio_channels};
@@ -407,9 +440,9 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                     }
                     std::scoped_lock lock(mutex_);
                     player_format_ = fmt;
-                    stream_ = std::move(*s);
-                    waiting_keyframe_ = true;
-                    message_ = stream_->notes;
+                    message_ = s->notes;
+                    slots_[0].info = std::move(*s);
+                    slots_[0].waiting_keyframe = true;
                 }
                 break;
             case proto::MsgType::StreamError:
@@ -442,13 +475,20 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
             case proto::MsgType::CursorPos:
                 if (auto c = proto::CursorPos::read(r)) {
                     std::scoped_lock lock(mutex_);
-                    cursor_pos_ = *c;
+                    slots_[c->stream_index > 1 ? 0 : c->stream_index].cursor = *c;
                 }
                 break;
             case proto::MsgType::Clipboard:
                 if (auto t = proto::TextMessage::read(r)) {
                     std::scoped_lock lock(mutex_);
                     clipboard_ = t->text;
+                }
+                break;
+            case proto::MsgType::StreamStopped:
+                if (auto m = proto::StreamStoppedMsg::read(r); m && m->stream_index == 1) {
+                    std::scoped_lock lock(mutex_);
+                    reset_slot(slots_[1]);
+                    second_error_ = m->reason;
                 }
                 break;
             case proto::MsgType::LatencyMark:
@@ -474,7 +514,7 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
             retryable_ = close_reason.empty() && !user_disconnect_;  // Corte de red, no un cierre explícito.
         }
     }
-    SetEvent(frame_event_);
+    for (auto& slot : slots_) SetEvent(slot.event);
 }
 
 void ClientSession::media_thread() {
@@ -553,13 +593,17 @@ void ClientSession::media_thread() {
             // Vigilante: siguen llegando paquetes de video pero hace >250 ms que ningún frame se completa
             // (p. ej. se perdió el keyframe). Con la pantalla quieta el host casi no envía y eso es normal.
             const std::uint64_t t = gpu::now_us();
-            if (last_frame_us_ != 0 && t - last_frame_us_ > 250'000) {
+            for (int i = 0; i < 2; ++i) {
+                std::uint64_t since_frame = 0;
                 std::uint64_t since_idr = 0;
                 {
                     std::scoped_lock lock(mutex_);
-                    since_idr = t - last_idr_request_us_;
+                    const StreamSlot& slot = slots_[static_cast<std::size_t>(i)];
+                    if (slot.last_frame_us == 0 || !slot.info) continue;
+                    since_frame = t - slot.last_frame_us;
+                    since_idr = t - slot.last_idr_request_us;
                 }
-                if (since_idr > 250'000) request_keyframe();
+                if (since_frame > 250'000 && since_idr > 250'000 && since_frame < 5'000'000) request_keyframe(i);
             }
         } else if (header->type == media::PacketType::Audio) {
             handle_audio(payload);
@@ -571,45 +615,49 @@ void ClientSession::handle_video(std::span<const std::uint8_t> payload) {
     ByteReader r(payload);
     const auto h = media::VideoShardHeader::read(r);
     if (!h) return;
+    const int index = (h->flags & media::kFrameFlagStream1) != 0 ? 1 : 0;
+    StreamSlot& slot = slots_[static_cast<std::size_t>(index)];
     std::optional<media::AssembledFrame> frame;
-    if (auto unit = assembler_.add(*h, r.rest())) frame = joiner_.add(std::move(*unit));  // Une los slices.
-    const std::uint32_t slice_lost = joiner_.take_lost();
-    const std::uint32_t lost = assembler_.take_lost() + slice_lost;
+    if (auto unit = slot.assembler.add(*h, r.rest())) frame = slot.joiner.add(std::move(*unit));  // Une los slices.
+    const std::uint32_t slice_lost = slot.joiner.take_lost();
+    const std::uint32_t lost = slot.assembler.take_lost() + slice_lost;
     bool need_idr = false;
     bool need_refresh = false;
     {
         std::scoped_lock lock(mutex_);
-        slice_frames_lost_ += slice_lost;
+        slot.slice_frames_lost += slice_lost;
         if (lost > 0) {
-            if (stream_ && stream_->intra_refresh && !waiting_keyframe_) {
+            if (slot.info && slot.info->intra_refresh && !slot.waiting_keyframe) {
                 // Intra-refresh: se sigue mostrando video; la zona dañada se repara en pocos frames.
                 need_refresh = true;
             } else {
-                waiting_keyframe_ = true;
+                slot.waiting_keyframe = true;
                 need_idr = true;
             }
         }
         if (frame) {
-            last_frame_us_ = gpu::now_us();
-            if (stream_ && frame->info.epoch != stream_->epoch) {
+            slot.last_frame_us = gpu::now_us();
+            if (!slot.info || frame->info.epoch != slot.info->epoch) {
                 // Frame de otra configuración: se descarta hasta tener la nueva.
-            } else if (waiting_keyframe_ && !frame->info.keyframe) {
+            } else if (slot.waiting_keyframe && !frame->info.keyframe) {
                 need_idr = true;
             } else {
-                if (frame->info.keyframe) waiting_keyframe_ = false;
-                frames_.push_back(Frame{std::move(*frame), last_frame_us_});
-                if (frames_.size() > 120) frames_.pop_front();  // La interfaz no está consumiendo.
+                if (frame->info.keyframe) slot.waiting_keyframe = false;
+                slot.frames.push_back(Frame{std::move(*frame), slot.last_frame_us});
+                if (slot.frames.size() > 120) slot.frames.pop_front();  // La interfaz no está consumiendo.
             }
         }
-        stats_.frames_recovered = assembler_.stats().frames_recovered;
-        stats_.frames_lost = assembler_.stats().frames_lost + slice_frames_lost_;
+        if (index == 0) {
+            stats_.frames_recovered = slot.assembler.stats().frames_recovered;
+            stats_.frames_lost = slot.assembler.stats().frames_lost + slot.slice_frames_lost;
+        }
     }
     if (need_idr) {
-        request_keyframe();
+        request_keyframe(index);
     } else if (need_refresh) {
-        request_recovery(proto::RecoveryReason::FrameLoss);
+        request_recovery(proto::RecoveryReason::FrameLoss, index);
     }
-    if (frame) SetEvent(frame_event_);
+    if (frame) SetEvent(slot.event);
 }
 
 void ClientSession::handle_audio(std::span<const std::uint8_t> payload) {
@@ -632,10 +680,11 @@ void ClientSession::handle_audio(std::span<const std::uint8_t> payload) {
     player_.push(samples);
 }
 
-std::vector<Frame> ClientSession::take_frames() {
+std::vector<Frame> ClientSession::take_frames(int index) {
     std::scoped_lock lock(mutex_);
-    std::vector<Frame> out(std::make_move_iterator(frames_.begin()), std::make_move_iterator(frames_.end()));
-    frames_.clear();
+    auto& frames = slots_[static_cast<std::size_t>(index)].frames;
+    std::vector<Frame> out(std::make_move_iterator(frames.begin()), std::make_move_iterator(frames.end()));
+    frames.clear();
     return out;
 }
 
@@ -646,9 +695,9 @@ std::optional<proto::CursorShape> ClientSession::take_cursor_shape() {
     return out;
 }
 
-proto::CursorPos ClientSession::cursor() const {
+proto::CursorPos ClientSession::cursor(int index) const {
     std::scoped_lock lock(mutex_);
-    return cursor_pos_;
+    return slots_[static_cast<std::size_t>(index)].cursor;
 }
 
 std::optional<std::string> ClientSession::take_clipboard() {

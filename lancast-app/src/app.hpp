@@ -21,6 +21,7 @@
 #include "lancast/platform/system.hpp"
 #include "lancast/platform/updater.hpp"
 #include "renderer.hpp"
+#include "second_window.hpp"
 
 struct ImFont;
 
@@ -67,6 +68,9 @@ private:
     void start_connect(const std::string& address);
     void disconnect_client(bool keep_view = false);
     void draw_reconnect_overlay();
+    void open_second_window(std::uint32_t monitor_id);
+    void close_second_window();
+    void draw_second_window_controls();
     void check_updates(bool manual);
     void start_update_download();
     void draw_update_banner();
@@ -176,6 +180,10 @@ private:
     bool update_dismissed_ = false;
     std::atomic<bool> update_cancel_{false};
     std::thread update_thread_;
+
+    // Segunda ventana (otro monitor del host en paralelo).
+    std::unique_ptr<SecondWindow> second_;
+    std::uint32_t second_monitor_id_ = 0;
 
     // Reconexión automática tras un corte de red.
     bool was_connected_ = false;

@@ -61,7 +61,10 @@ struct Session {
     std::vector<std::int16_t> resampled;
     std::atomic<std::uint32_t> audio_target_rate{0};  // 0 = la del sistema.
     std::atomic<std::uint8_t> audio_target_channels{2};
-    std::unique_ptr<Streamer> streamer;
+    std::unique_ptr<Streamer> streamer;  // Stream principal.
+    std::unique_ptr<Streamer> second;    // Segunda ventana del cliente (otro monitor), opcional.
+
+    Streamer* streamer_for(std::uint8_t index) const { return index == 1 && second ? second.get() : streamer.get(); }
     audio::LoopbackCapture audio;
     std::atomic<bool> audio_enabled{false};
     input::Injector injector;
@@ -257,6 +260,7 @@ struct HostService::Impl {
                 s->media->set_endpoint(from);
                 log::info("Medios: enviando a {}", from.to_string());
                 if (s->streamer) s->streamer->request_keyframe();
+                if (s->second) s->second->request_keyframe();
             }
         }
     }
@@ -472,6 +476,7 @@ struct HostService::Impl {
     }
 
     void end_session(const std::shared_ptr<Session>& s) {
+        if (s->second) s->second->stop();
         if (s->streamer) s->streamer->stop();
         s->audio.stop();
         s->injector.release_all();
@@ -559,6 +564,35 @@ struct HostService::Impl {
         if (mark.host_time_us != 0) s.channel->send(proto::encode(proto::MsgType::LatencyMark, mark));
     }
 
+    // Segunda ventana del cliente: otro monitor del host en paralelo (sin audio, mismo canal UDP).
+    void configure_second(Session& s, proto::StreamConfig c) {
+        if (!c.enabled) {
+            if (s.second) {
+                s.second->stop();
+                s.second.reset();
+                log::info("Segundo stream detenido");
+            }
+            return;
+        }
+        c.audio = false;
+        c.fec_percent = std::min<std::uint8_t>(c.fec_percent, 50);
+        if (!s.second) {
+            Streamer::Callbacks cb;
+            cb.started = [&s](const proto::StreamStarted& info) {
+                s.channel->send(proto::encode(proto::MsgType::StreamStarted, info));
+            };
+            cb.error = [&s](const std::string& msg) {
+                s.channel->send(proto::encode(proto::MsgType::StreamStopped, proto::StreamStoppedMsg{1, msg}));
+            };
+            cb.cursor_pos = [&s](const proto::CursorPos& pos) {
+                s.channel->send(proto::encode(proto::MsgType::CursorPos, pos));
+            };
+            s.second = std::make_unique<Streamer>(*s.media, std::move(cb), std::uint8_t{1});
+            log::info("Segundo stream: monitor {}", c.monitor_id);
+        }
+        s.second->configure(c, s.caps.decoders, 0, 0, s.caps.supports_slices);
+    }
+
     void run_session(Session& s) {
         send_host_info(s);
         const HostSettings hs = host_settings();
@@ -589,7 +623,9 @@ struct HostService::Impl {
                     if (auto c = proto::ClientCaps::read(r)) s.caps = std::move(*c);
                     break;
                 case proto::MsgType::StreamConfig:
-                    if (auto c = proto::StreamConfig::read(r)) {
+                    if (auto c = proto::StreamConfig::read(r); c && c->stream_index == 1) {
+                        configure_second(s, *c);
+                    } else if (c) {
                         c->fec_percent = std::min<std::uint8_t>(c->fec_percent, 50);
                         s.audio_enabled = c->audio && cur.allow_audio;
                         if (!cur.allow_audio) c->audio = false;
@@ -605,7 +641,8 @@ struct HostService::Impl {
                     // Cuerpo opcional (1.3+): motivo. Sin cuerpo = el decodificador necesita un keyframe.
                     const auto reason = r.remaining() >= 1 ? static_cast<proto::RecoveryReason>(r.u8())
                                                            : proto::RecoveryReason::NeedKeyframe;
-                    s.streamer->request_recovery(reason);
+                    const std::uint8_t index = r.remaining() >= 1 ? r.u8() : 0;
+                    s.streamer_for(index)->request_recovery(reason);
                     break;
                 }
                 case proto::MsgType::Ping:
@@ -616,7 +653,9 @@ struct HostService::Impl {
                     break;
                 case proto::MsgType::MouseAbs:
                     if (auto m = proto::MouseAbs::read(r); m && control) {
-                        if (const auto src = s.streamer->source()) s.injector.mouse_abs(normalized_to_desktop({m->x, m->y}, *src));
+                        if (const auto src = s.streamer_for(m->stream_index)->source()) {
+                            s.injector.mouse_abs(normalized_to_desktop({m->x, m->y}, *src));
+                        }
                     }
                     break;
                 case proto::MsgType::MouseRel:

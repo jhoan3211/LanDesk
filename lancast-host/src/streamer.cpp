@@ -63,7 +63,8 @@ public:
 
 }  // namespace
 
-Streamer::Streamer(net::MediaSender& sender, Callbacks callbacks) : sender_(sender), callbacks_(std::move(callbacks)) {
+Streamer::Streamer(net::MediaSender& sender, Callbacks callbacks, std::uint8_t stream_index)
+    : sender_(sender), callbacks_(std::move(callbacks)), stream_index_(stream_index) {
     thread_ = std::thread([this] { run(); });
     send_thread_ = std::thread([this] { sender_loop(); });
 }
@@ -266,6 +267,7 @@ void Streamer::run() {
                 info.epoch = ctx->epoch;
             }
             info.keyframe = pkt.keyframe;
+            info.stream_index = stream_index_;
             info.slice = ctx->slices;
             info.slice_index = pkt.slice_index;
             info.last_slice = pkt.last_slice;
@@ -319,6 +321,7 @@ void Streamer::run() {
         next->info.intra_refresh = next->encoder->intra_refresh_active();
         next->info.slices = next->encoder->slices_active();
         next->info.encoder_backend = next->encoder->backend();
+        next->info.stream_index = stream_index_;
         p = std::move(next);
         {
             std::scoped_lock lock(mutex_);
@@ -409,7 +412,7 @@ void Streamer::run() {
                 callbacks_.cursor_pos(proto::CursorPos{
                     ptr.visible && ptr.x >= src.x && ptr.y >= src.y && ptr.x < src.right() && ptr.y < src.bottom(),
                     static_cast<float>(ptr.x - src.x) / static_cast<float>(src.width),
-                    static_cast<float>(ptr.y - src.y) / static_cast<float>(src.height)});
+                    static_cast<float>(ptr.y - src.y) / static_cast<float>(src.height), stream_index_});
             }
         }
         if (auto shape = p->capture->take_pointer_shape(); shape && callbacks_.cursor_shape) callbacks_.cursor_shape(*shape);
