@@ -24,14 +24,18 @@ const ImVec4 kWarn{0.95f, 0.70f, 0.25f, 1.0f};
 const ImVec4 kBad{0.93f, 0.36f, 0.36f, 1.0f};
 const ImVec4 kMuted{0.62f, 0.65f, 0.70f, 1.0f};
 
-bool input_text(const char* label, std::string& value, ImGuiInputTextFlags flags = 0) {
+// Actualiza `value` en cada tecla (así los botones ven el texto al instante) y devuelve true si cambió.
+// Si se pasa `enter`, indica si se pulsó Enter en este campo.
+bool input_text(const char* label, std::string& value, ImGuiInputTextFlags flags = 0, bool* enter = nullptr) {
     char buf[512];
     std::snprintf(buf, sizeof(buf), "%s", value.c_str());
-    if (ImGui::InputText(label, buf, sizeof(buf), flags)) {
-        value = buf;
-        return true;
+    const bool changed = ImGui::InputText(label, buf, sizeof(buf), flags & ~ImGuiInputTextFlags_EnterReturnsTrue);
+    if (changed) value = buf;
+    if (enter != nullptr) {
+        *enter = ImGui::IsItemDeactivated() &&
+                 (ImGui::IsKeyPressed(ImGuiKey_Enter, false) || ImGui::IsKeyPressed(ImGuiKey_KeypadEnter, false));
     }
-    return false;
+    return changed;
 }
 
 void badge(const char* text, const ImVec4& color) {
@@ -82,6 +86,12 @@ bool danger_button(const char* label, const ImVec2& size = ImVec2(0, 0)) {
 }
 
 std::string fmt_ms(double v) { return v <= 0 ? "--" : std::format("{:.1f} ms", v); }
+
+constexpr std::uint32_t kAudioRates[] = {0, 48000, 44100, 32000, 24000, 16000};
+
+std::string audio_rate_label(std::uint32_t rate) {
+    return rate == 0 ? std::string{"La del sistema"} : std::format("{} Hz", rate);
+}
 
 }  // namespace
 
@@ -169,7 +179,7 @@ void App::draw_sidebar() {
     ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.6f);
     ImGui::TextColored(kAccent, "LanCast");
     ImGui::PopFont();
-    ImGui::TextColored(kMuted, "%s", settings_.device_name.c_str());
+    ImGui::TextColored(kMuted, "%s · v1.1.0", settings_.device_name.c_str());
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -228,7 +238,8 @@ void App::draw_connect_page() {
 
     section("Conexión manual por IP");
     ImGui::SetNextItemWidth(320 * scale_);
-    const bool enter = input_text("##addr", address_input_, ImGuiInputTextFlags_EnterReturnsTrue);
+    bool enter = false;
+    input_text("##addr", address_input_, 0, &enter);
     ImGui::SameLine();
     if ((primary_button("Conectar") || enter) && !address_input_.empty()) start_connect(address_input_);
     help("Escribe la IP del otro equipo (por ejemplo 192.168.40.7) o IP:puerto si cambiaste el puerto (por defecto 47984).");
@@ -333,7 +344,8 @@ void App::draw_stream_settings(bool live) {
     if (ImGui::BeginPopup("##saveprofile")) {
         ImGui::TextUnformatted("Nombre del perfil");
         ImGui::SetNextItemWidth(260 * scale_);
-        const bool enter = input_text("##pname", new_profile_name_, ImGuiInputTextFlags_EnterReturnsTrue);
+        bool enter = false;
+        input_text("##pname", new_profile_name_, 0, &enter);
         if ((ImGui::Button("Guardar") || enter) && !new_profile_name_.empty()) {
             std::erase_if(profiles, [&](const Profile& p) { return p.name == new_profile_name_; });
             profiles.push_back(Profile{new_profile_name_, s});
@@ -404,11 +416,11 @@ void App::draw_stream_settings(bool live) {
         if (s.resolution == ResolutionPreset::Custom) {
             int wh[2] = {static_cast<int>(s.custom_width), static_cast<int>(s.custom_height)};
             row("  Ancho × alto");
-            if (ImGui::InputInt2("##custom", wh, ImGuiInputTextFlags_EnterReturnsTrue)) {
+            if (ImGui::InputInt2("##custom", wh)) {
                 s.custom_width = static_cast<std::uint32_t>(std::clamp(wh[0], 320, 7680)) & ~1u;
                 s.custom_height = static_cast<std::uint32_t>(std::clamp(wh[1], 240, 4320)) & ~1u;
-                changed = true;
             }
+            if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
         }
 
         // FPS
@@ -423,10 +435,8 @@ void App::draw_stream_settings(bool live) {
             }
             int custom = static_cast<int>(s.fps);
             ImGui::SetNextItemWidth(120 * scale_);
-            if (ImGui::InputInt("Personalizado", &custom, 1, 10, ImGuiInputTextFlags_EnterReturnsTrue)) {
-                s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
-                changed = true;
-            }
+            if (ImGui::InputInt("Personalizado", &custom, 1, 10)) s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
+            if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
             ImGui::EndCombo();
         }
         help("Limitado por la frecuencia del monitor del host.");
@@ -502,7 +512,34 @@ void App::draw_stream_settings(bool live) {
         help("Desactivado = menor latencia (permite tearing).");
 
         row("Audio");
-        if (ImGui::Checkbox("##audio", &s.audio)) changed = true;
+        if (ImGui::Checkbox("Transmitir##audio", &s.audio)) changed = true;
+        ImGui::BeginDisabled(!s.audio);
+        row("  Frecuencia");
+        if (ImGui::BeginCombo("##arate", audio_rate_label(s.audio_sample_rate).c_str())) {
+            for (const std::uint32_t r : kAudioRates) {
+                if (ImGui::Selectable(audio_rate_label(r).c_str(), s.audio_sample_rate == r)) {
+                    s.audio_sample_rate = r;
+                    changed = true;
+                }
+            }
+            ImGui::EndCombo();
+        }
+        row("  Canales");
+        int ch = s.audio_stereo ? 0 : 1;
+        if (ImGui::RadioButton("Estéreo", &ch, 0)) changed = true;
+        ImGui::SameLine();
+        if (ImGui::RadioButton("Mono", &ch, 1)) changed = true;
+        s.audio_stereo = ch == 0;
+        row("  Volumen");
+        int vol = static_cast<int>(s.audio_volume);
+        if (ImGui::SliderInt("##vol", &vol, 0, 100, "%d %%")) s.audio_volume = static_cast<std::uint32_t>(vol);
+        if (ImGui::IsItemDeactivatedAfterEdit()) save_settings();  // Local: no hace falta renegociar.
+        row("  Búfer");
+        int buf = static_cast<int>(s.audio_buffer_ms);
+        if (ImGui::SliderInt("##abuf", &buf, 5, 200, "%d ms")) s.audio_buffer_ms = static_cast<std::uint32_t>(buf);
+        if (ImGui::IsItemDeactivatedAfterEdit()) save_settings();
+        help("Menos búfer = menos latencia de audio. Súbelo si escuchas cortes.");
+        ImGui::EndDisabled();
 
         row("FEC");
         int fec = static_cast<int>(s.fec_percent);
@@ -768,18 +805,18 @@ void App::draw_settings_page() {
     section("Red y seguridad (host)");
     int ports[2] = {settings_.host.control_port, settings_.host.media_port};
     ImGui::SetNextItemWidth(260 * scale_);
-    if (ImGui::InputInt2("Puertos: control TCP / video UDP", ports, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (ImGui::InputInt2("Puertos: control TCP / video UDP", ports)) {
         settings_.host.control_port = static_cast<std::uint16_t>(std::clamp(ports[0], 1024, 65534));
         settings_.host.media_port = static_cast<std::uint16_t>(std::clamp(ports[1], 1024, 65535));
-        changed = true;
     }
+    if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
     help("El canal de archivos usa el puerto de control + 1.");
     changed |= ImGui::Checkbox("Solo aceptar conexiones de redes privadas (192.168.x.x, 10.x.x.x, 172.16-31.x.x)",
                                &settings_.host.private_networks_only);
     std::string whitelist;
     for (const auto& ip : settings_.host.ip_whitelist) whitelist += (whitelist.empty() ? "" : ", ") + ip;
     ImGui::SetNextItemWidth(420 * scale_);
-    if (input_text("IPs permitidas (vacío = todas)", whitelist, ImGuiInputTextFlags_EnterReturnsTrue)) {
+    if (input_text("IPs permitidas (vacío = todas)", whitelist)) {
         settings_.host.ip_whitelist.clear();
         std::size_t start = 0;
         while (start < whitelist.size()) {
@@ -827,8 +864,181 @@ void App::draw_diagnostics_page() {
 
 // ------------------------------------------------------------------------------------------------ durante el stream
 
+void App::draw_stream_toolbar() {
+    // Aparece al llevar el mouse al borde superior de la ventana (como en otros escritorios remotos).
+    const std::uint64_t now = gpu::now_us();
+    const ImGuiIO& io = ImGui::GetIO();
+    if (io.MousePos.y >= 0 && io.MousePos.y < 6.0f * scale_ && ImGui::IsMousePosValid()) toolbar_until_us_ = now + 1'500'000;
+    if (now > toolbar_until_us_ && !show_menu_) return;
+    if (show_menu_) return;  // El menú completo ya está abierto.
+
+    StreamSettings& s = settings_.client.stream;
+    const auto stream = session_->stream();
+    const auto info = session_->host_info();
+    bool changed = false;
+
+    ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x * 0.5f, 0), ImGuiCond_Always, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowBgAlpha(0.92f);
+    ImGui::Begin("##toolbar", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
+                     ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove);
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextColored(kAccent, "%s", session_->host_name().c_str());
+    if (stream) {
+        ImGui::SetItemTooltip("%s %ux%u · %u fps · %u Mbps · audio %s", std::string{to_string(stream->codec)}.c_str(),
+                              stream->width, stream->height, stream->fps, stream->bitrate_kbps / 1000,
+                              stream->audio_rate ? std::format("{} Hz {}", stream->audio_rate,
+                                                               stream->audio_channels == 1 ? "mono" : "estéreo").c_str()
+                                                 : "apagado");
+    }
+
+    // Resolución
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(130 * scale_);
+    if (ImGui::BeginCombo("##tres", std::string{to_string(s.resolution)}.c_str())) {
+        for (int i = 0; i < static_cast<int>(ResolutionPreset::Custom); ++i) {
+            const auto r = static_cast<ResolutionPreset>(i);
+            if (ImGui::Selectable(std::string{to_string(r)}.c_str(), s.resolution == r)) {
+                s.resolution = r;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetItemTooltip("Resolución");
+
+    // FPS
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80 * scale_);
+    if (ImGui::BeginCombo("##tfps", std::format("{} fps", s.fps).c_str())) {
+        for (const std::uint32_t f : {30u, 60u, 90u, 120u, 144u, 165u, 240u}) {
+            if (ImGui::Selectable(std::format("{} fps", f).c_str(), s.fps == f)) {
+                s.fps = f;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    // Monitor
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(170 * scale_);
+    const std::string mon = s.monitor_id == 0 ? std::string{"Todos los monitores"} : std::format("Monitor {}", s.monitor_id);
+    if (ImGui::BeginCombo("##tmon", mon.c_str())) {
+        if (info) {
+            for (const auto& m : info->monitors) {
+                if (ImGui::Selectable(std::format("{}: {} ({}x{})", m.id, m.name, m.rect.width, m.rect.height).c_str(),
+                                      s.monitor_id == m.id)) {
+                    s.monitor_id = m.id;
+                    changed = true;
+                }
+            }
+        }
+        if (ImGui::Selectable("Todos los monitores", s.monitor_id == 0)) {
+            s.monitor_id = 0;
+            changed = true;
+        }
+        ImGui::EndCombo();
+    }
+
+    // Bitrate
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110 * scale_);
+    const std::string br = s.auto_bitrate ? std::string{"Bitrate auto"} : std::format("{} Mbps", s.bitrate_mbps);
+    if (ImGui::BeginCombo("##tbr", br.c_str())) {
+        if (ImGui::Selectable("Automático", s.auto_bitrate)) {
+            s.auto_bitrate = true;
+            changed = true;
+        }
+        for (const std::uint32_t m : {10u, 20u, 30u, 50u, 80u, 100u, 150u, 200u, 300u, 500u}) {
+            if (ImGui::Selectable(std::format("{} Mbps", m).c_str(), !s.auto_bitrate && s.bitrate_mbps == m)) {
+                s.auto_bitrate = false;
+                s.bitrate_mbps = m;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    // Códec
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(110 * scale_);
+    if (ImGui::BeginCombo("##tcodec", std::string{to_string(s.codec)}.c_str())) {
+        for (int i = 0; i <= 3; ++i) {
+            const auto c = static_cast<CodecChoice>(i);
+            if (ImGui::Selectable(std::string{to_string(c)}.c_str(), s.codec == c)) {
+                s.codec = c;
+                changed = true;
+            }
+        }
+        ImGui::EndCombo();
+    }
+
+    // Audio
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(140 * scale_);
+    const std::string audio_label = !s.audio ? std::string{"Audio apagado"}
+                                             : std::format("Audio {}", s.audio_sample_rate == 0 ? std::string{"sistema"}
+                                                                                                : std::format("{:.1f} kHz", s.audio_sample_rate / 1000.0));
+    if (ImGui::BeginCombo("##taudio", audio_label.c_str())) {
+        if (ImGui::Selectable("Apagado", !s.audio)) {
+            s.audio = false;
+            changed = true;
+        }
+        for (const std::uint32_t r : kAudioRates) {
+            if (ImGui::Selectable(audio_rate_label(r).c_str(), s.audio && s.audio_sample_rate == r)) {
+                s.audio = true;
+                s.audio_sample_rate = r;
+                changed = true;
+            }
+        }
+        ImGui::Separator();
+        if (ImGui::Selectable("Estéreo", s.audio_stereo)) {
+            s.audio_stereo = true;
+            changed = true;
+        }
+        if (ImGui::Selectable("Mono", !s.audio_stereo)) {
+            s.audio_stereo = false;
+            changed = true;
+        }
+        ImGui::Separator();
+        int vol = static_cast<int>(s.audio_volume);
+        ImGui::SetNextItemWidth(160 * scale_);
+        if (ImGui::SliderInt("Volumen", &vol, 0, 100, "%d %%")) s.audio_volume = static_cast<std::uint32_t>(vol);
+        if (ImGui::IsItemDeactivatedAfterEdit()) save_settings();
+        ImGui::EndCombo();
+    }
+
+    ImGui::SameLine();
+    if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) {
+        show_stats_ = !show_stats_;
+        settings_.client.show_stats = show_stats_;
+        save_settings();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Más opciones")) show_menu_ = true;
+    ImGui::SameLine();
+    if (ImGui::Button(fullscreen_ ? "Ventana" : "Pantalla completa")) toggle_fullscreen();
+    ImGui::SameLine();
+    if (danger_button("Desconectar")) PostMessageW(hwnd_, WM_APP + 3, 0, 0);
+
+    if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup) ||
+        ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
+        toolbar_until_us_ = now + 1'500'000;
+    }
+    ImGui::End();
+
+    if (changed) {
+        settings_.client.active_profile.clear();
+        apply_stream_settings();
+        toast("Aplicando cambios…");
+    }
+}
+
 void App::draw_stream_overlay() {
     const auto stream = session_->stream();
+
+    draw_stream_toolbar();
 
     // Cursor remoto en modo "solo ver" (el del sistema no se mueve con el del host).
     if (!control_enabled() && stream) {
@@ -942,7 +1152,8 @@ void App::draw_pin_modal() {
             ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.8f);
             ImGui::SetNextItemWidth(220 * scale_);
             if (ImGui::IsWindowAppearing()) ImGui::SetKeyboardFocusHere();
-            const bool enter = input_text("##pin", pin_input_, ImGuiInputTextFlags_CharsDecimal | ImGuiInputTextFlags_EnterReturnsTrue);
+            bool enter = false;
+            input_text("##pin", pin_input_, ImGuiInputTextFlags_CharsDecimal, &enter);
             ImGui::PopFont();
             if (pin_input_.size() > 6) pin_input_.resize(6);
             ImGui::BeginDisabled(pin_input_.size() != 6);

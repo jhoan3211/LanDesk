@@ -95,6 +95,10 @@ public:
                           double present_ms);
     [[nodiscard]] Stats stats() const;
     void set_simulated_loss(std::uint32_t percent) noexcept { simulated_loss_ = percent; }
+    void set_audio_output(std::uint32_t volume_percent, std::uint32_t buffer_ms) noexcept {
+        player_.set_volume(static_cast<float>(volume_percent) / 100.0f);
+        player_.set_target_ms(buffer_ms);
+    }
 
     files::Manager& files() noexcept { return files_; }
 

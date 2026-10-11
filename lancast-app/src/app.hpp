@@ -72,6 +72,7 @@ private:
     void send_mouse_position();
     void handle_mouse_button(UINT msg, WPARAM wp);
     [[nodiscard]] bool control_enabled() const;
+    [[nodiscard]] bool ui_captures_mouse() const;
 
     // Interfaz
     void draw_ui();
@@ -85,6 +86,7 @@ private:
     void draw_diagnostics_page();
     void draw_stream_overlay();
     void draw_stats_overlay();
+    void draw_stream_toolbar();
     void draw_pin_modal();
     void draw_toast();
     void toast(std::string text);
@@ -130,11 +132,15 @@ private:
     bool pin_modal_open_ = false;
     bool show_menu_ = false;
     bool show_stats_ = false;
+    std::uint64_t toolbar_until_us_ = 0;  // La barra superior se muestra hasta este instante.
     bool relative_mouse_ = false;
     std::optional<PointF> pending_mouse_;
     HCURSOR remote_cursor_ = nullptr;
     bool remote_cursor_visible_ = true;
     HHOOK keyboard_hook_ = nullptr;
+    bool mod_ctrl_[2] = {false, false};  // [izquierdo, derecho]
+    bool mod_alt_[2] = {false, false};
+    bool mod_shift_[2] = {false, false};
     std::string last_remote_clipboard_;
     std::uint64_t last_present_us_ = 0;
     bool frame_presented_since_stream_ = false;

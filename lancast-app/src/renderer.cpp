@@ -62,7 +62,14 @@ bool VideoRenderer::draw(ID3D11Texture2D* backbuffer, Size backbuffer_size, cons
     }
     const RECT src{0, 0, static_cast<LONG>(last_->size.width), static_cast<LONG>(last_->size.height)};
     const RECT dst{view.x, view.y, view.right(), view.bottom()};
-    return vp_->process(last_->texture.Get(), last_->subresource, backbuffer, &src, &dst);
+    const bool ok = vp_->process(last_->texture.Get(), last_->subresource, backbuffer, &src, &dst);
+    if (!ok && !draw_failed_logged_) {
+        log::error("No se pudo dibujar el video: {}x{} -> back buffer {}x{}, destino {}x{} en ({},{})", size_.width,
+                   size_.height, backbuffer_size.width, backbuffer_size.height, view.width, view.height, view.x, view.y);
+        draw_failed_logged_ = true;
+    }
+    if (ok) draw_failed_logged_ = false;
+    return ok;
 }
 
 }  // namespace lancast::app

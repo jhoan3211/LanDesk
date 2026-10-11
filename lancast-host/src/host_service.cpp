@@ -7,6 +7,7 @@
 #include <format>
 #include <map>
 
+#include "lancast/core/audio_resample.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/media.hpp"
@@ -54,6 +55,10 @@ struct Session {
     std::unique_ptr<net::DatagramCipher> audio_cipher;
     std::vector<std::uint8_t> audio_scratch;
     std::uint32_t audio_seq = 0;
+    audio::Resampler resampler;
+    std::vector<std::int16_t> resampled;
+    std::atomic<std::uint32_t> audio_target_rate{0};  // 0 = la del sistema.
+    std::atomic<std::uint8_t> audio_target_channels{2};
     std::unique_ptr<Streamer> streamer;
     audio::LoopbackCapture audio;
     std::atomic<bool> audio_enabled{false};
@@ -284,8 +289,18 @@ struct HostService::Impl {
         std::vector<std::uint8_t> hello_raw;
         if (!stream.recv_frame(hello_raw, kHandshakeMax)) return;
         const auto hello = parse<proto::Hello>(hello_raw, proto::MsgType::Hello);
-        if (!hello || hello->version != proto::kVersion) {
+        if (!hello) {
             log::warn("Handshake inválido desde {}", peer.ip_string());
+            return;
+        }
+        if (hello->version != proto::kVersion) {
+            proto::HelloAck reject;
+            reject.accepted = false;
+            reject.message = std::format("Versión de LanCast distinta (este equipo usa el protocolo {}, el otro el {}). "
+                                         "Instala la misma versión en los dos PC.",
+                                         proto::kVersion, hello->version);
+            stream.send_frame(proto::encode(proto::MsgType::HelloAck, reject));
+            log::warn("Conexión de {} con otra versión del protocolo ({})", peer.ip_string(), hello->version);
             return;
         }
 
@@ -482,17 +497,24 @@ struct HostService::Impl {
         s.channel->send(proto::encode(proto::MsgType::HostInfo, info));
     }
 
-    void on_audio(Session& s, std::span<const std::int16_t> pcm, std::uint32_t frames, const audio::Format& fmt) {
+    void on_audio(Session& s, std::span<const std::int16_t> pcm, std::uint32_t /*frames*/, const audio::Format& fmt) {
         if (!s.audio_enabled || !s.media->endpoint()) return;
         if (!s.audio_cipher) s.audio_cipher = s.media->make_cipher();
-        constexpr std::uint32_t kMaxFrames = 300;  // 1200 bytes de PCM estéreo por datagrama.
+        // Frecuencia y canales elegidos por el cliente (se pueden cambiar en vivo).
+        const std::uint32_t rate = s.audio_target_rate.load() != 0 ? s.audio_target_rate.load() : fmt.sample_rate;
+        const std::uint8_t channels = s.audio_target_channels.load();
+        s.resampler.configure(fmt.sample_rate, rate, channels);
+        s.resampler.process(pcm, s.resampled);
+        const auto frames = static_cast<std::uint32_t>(s.resampled.size() / channels);
+
+        const std::uint32_t max_frames = 600 / channels;  // 1200 bytes de PCM por datagrama.
         const std::uint64_t now = gpu::now_us();
-        for (std::uint32_t off = 0; off < frames; off += kMaxFrames) {
-            const std::uint32_t n = std::min(kMaxFrames, frames - off);
-            ByteWriter w(32 + n * fmt.channels * 2);
-            w.u32(++s.audio_seq).u64(now).u32(fmt.sample_rate).u8(fmt.channels).u16(static_cast<std::uint16_t>(n));
-            const auto* bytes = reinterpret_cast<const std::uint8_t*>(pcm.data() + static_cast<std::size_t>(off) * fmt.channels);
-            w.raw({bytes, static_cast<std::size_t>(n) * fmt.channels * 2});
+        for (std::uint32_t off = 0; off < frames; off += max_frames) {
+            const std::uint32_t n = std::min(max_frames, frames - off);
+            ByteWriter w(32 + n * channels * 2);
+            w.u32(++s.audio_seq).u64(now).u32(rate).u8(channels).u16(static_cast<std::uint16_t>(n));
+            const auto* bytes = reinterpret_cast<const std::uint8_t*>(s.resampled.data() + static_cast<std::size_t>(off) * channels);
+            w.raw({bytes, static_cast<std::size_t>(n) * channels * 2});
             s.media->send(*s.audio_cipher, media::PacketType::Audio, w.data(), s.audio_scratch);
         }
     }
@@ -530,8 +552,12 @@ struct HostService::Impl {
                     if (auto c = proto::StreamConfig::read(r)) {
                         c->fec_percent = std::min<std::uint8_t>(c->fec_percent, 50);
                         s.audio_enabled = c->audio && cur.allow_audio;
+                        if (!cur.allow_audio) c->audio = false;
                         const audio::Format fmt = s.audio.format();
-                        s.streamer->configure(*c, s.caps.decoders, fmt.sample_rate, fmt.channels);
+                        const std::uint32_t rate = c->audio_rate == 0 ? fmt.sample_rate : std::clamp<std::uint32_t>(c->audio_rate, 8000, 192000);
+                        s.audio_target_rate = c->audio_rate == 0 ? 0 : rate;
+                        s.audio_target_channels = c->audio_channels == 1 ? 1 : 2;
+                        s.streamer->configure(*c, s.caps.decoders, rate, s.audio_target_channels.load());
                     }
                     break;
                 case proto::MsgType::RequestKeyframe:

@@ -24,6 +24,8 @@ public:
     bool draw(ID3D11Texture2D* backbuffer, Size backbuffer_size, const Rect& view);
 
     void reset();
+    // Suelta las vistas sobre el back buffer (necesario antes de redimensionar la swapchain).
+    void release_target() { vp_.reset(); }
     [[nodiscard]] bool has_picture() const noexcept { return last_.has_value(); }
     [[nodiscard]] const std::string& error() const noexcept { return error_; }
     [[nodiscard]] std::string decoder_name() const { return decoder_ ? decoder_->name() : std::string{}; }
@@ -44,6 +46,7 @@ private:
     std::optional<mf::DecodedFrame> last_;
     std::string error_;
     bool needs_keyframe_ = false;
+    bool draw_failed_logged_ = false;
 };
 
 }  // namespace lancast::app

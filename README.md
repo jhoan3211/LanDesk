@@ -29,6 +29,10 @@ En el **PC desde el que controlas** (cliente):
 
 Mientras alguien está conectado, el host muestra un aviso rojo **"Sesión activa desde …"** con un botón **Desconectar**.
 
+## Cambiar la configuración durante la sesión
+
+Lleva el mouse al **borde superior** de la ventana del stream: aparece una barra con **resolución, FPS, monitor, bitrate, códec y audio** (frecuencia, estéreo/mono y volumen), más *Estadísticas*, *Más opciones*, *Pantalla completa* y *Desconectar*. Los cambios se aplican al momento sin reconectar; el bitrate, el FEC y el audio ni siquiera reinician el video.
+
 ## Atajos durante la sesión
 
 | Atajo | Acción |
@@ -48,7 +52,7 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 - **Configuración del stream** (antes y durante la sesión, sin reconectar): monitor (o todos), resolución (nativa, 720p, 1080p, 1440p, 4K o personalizada), FPS (30–240 o personalizado), códec (automático, H.264, HEVC, AV1), bitrate (automático o 5–1000 Mbps), CBR/VBR, escalado (ajustar, estirar, 1:1), V-Sync, audio y FEC (0–50 %). **Perfiles** con nombre ("Trabajo 1440p 4:4:4", "Juego 144 Hz", "Celular" y los tuyos).
 - **Multi-monitor**: lista de monitores del host con resolución, Hz y posición (incluidas coordenadas negativas); cambio en vivo.
 - **Control remoto**: mouse absoluto o relativo, rueda, teclado por scancodes, cursor dibujado localmente (sin latencia) y modo solo ver.
-- **Audio** del host (WASAPI loopback, PCM 48 kHz sin compresión: cero latencia de códec).
+- **Audio** del host (WASAPI loopback, PCM sin compresión: cero latencia de códec). Frecuencia elegible en vivo (la del sistema, 48 000, 44 100, 32 000, 24 000 o 16 000 Hz), estéreo o mono, volumen y búfer de reproducción (5–200 ms).
 - **Portapapeles** de texto bidireccional.
 - **Archivos**: arrastra archivos o carpetas a la ventana para enviarlos; desde el host, menú de la bandeja → *Enviar archivos al cliente*. Bloques de 4 MB, **reanudable**, verificado con SHA-256, con progreso, velocidad y tiempo restante. Nunca sobrescribe (guarda como `nombre (1).ext`) salvo que lo actives. Carpeta por defecto: `Descargas\LanCast`.
 - **Seguridad**: emparejamiento con PIN (PBKDF2) y después secreto compartido de 256 bits por equipo (TOFU, guardado con DPAPI); intercambio ECDH P-256; todo el tráfico (control, video, audio y archivos) cifrado con **AES-256-GCM**. El host solo acepta IP privadas (RFC1918) y admite lista blanca de IP. Bloqueo de 10 minutos tras 5 PIN incorrectos.

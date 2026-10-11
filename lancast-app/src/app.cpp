@@ -194,14 +194,25 @@ bool App::create_swapchain() {
 
 void App::resize_swapchain(UINT width, UINT height) {
     if (width == 0 || height == 0 || !swapchain_) return;
+    // ResizeBuffers exige que no quede ninguna referencia al back buffer: la vista de salida del
+    // procesador de video también cuenta.
     rtv_.Reset();
+    if (renderer_) renderer_->release_target();
     device_.context->OMSetRenderTargets(0, nullptr, nullptr);
+    device_.context->ClearState();
     device_.context->Flush();
-    swapchain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN, tearing_supported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    const HRESULT hr = swapchain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN,
+                                                 tearing_supported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
+    if (FAILED(hr)) {
+        log::error("ResizeBuffers falló (0x{:08X}) al cambiar a {}x{}", static_cast<std::uint32_t>(hr), width, height);
+    }
     Microsoft::WRL::ComPtr<ID3D11Texture2D> bb;
     swapchain_->GetBuffer(0, IID_PPV_ARGS(&bb));
     device_.device->CreateRenderTargetView(bb.Get(), nullptr, &rtv_);
-    backbuffer_size_ = Size{width, height};
+    // Tamaño real del back buffer (si ResizeBuffers falló, sigue siendo el anterior).
+    D3D11_TEXTURE2D_DESC desc{};
+    bb->GetDesc(&desc);
+    backbuffer_size_ = Size{desc.Width, desc.Height};
 }
 
 void App::apply_dpi(UINT dpi) {
@@ -345,6 +356,11 @@ bool App::streaming() const {
     return session_ && session_->state() == client::State::Connected && session_->stream().has_value();
 }
 
+bool App::ui_captures_mouse() const {
+    // El mouse está sobre la barra superior, el menú u otra ventana de LanCast: no se envía al host.
+    return ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse;
+}
+
 bool App::control_enabled() const {
     if (!session_ || settings_.client.view_only) return false;
     const auto info = session_->host_info();
@@ -371,6 +387,8 @@ proto::StreamConfig App::make_stream_config() const {
     c.hdr = s.hdr;
     c.audio = s.audio;
     c.fec_percent = static_cast<std::uint8_t>(s.fec_percent);
+    c.audio_rate = s.audio_sample_rate;
+    c.audio_channels = s.audio_stereo ? 2 : 1;
     return c;
 }
 
@@ -466,7 +484,7 @@ void App::send_mouse_position() {
         pending_mouse_.reset();
         return;
     }
-    if (show_menu_ && ImGui::GetCurrentContext() != nullptr && ImGui::GetIO().WantCaptureMouse) {
+    if (ui_captures_mouse()) {
         pending_mouse_.reset();
         return;
     }
@@ -480,7 +498,7 @@ void App::send_mouse_position() {
 
 void App::handle_mouse_button(UINT msg, WPARAM wp) {
     if (!streaming() || !control_enabled()) return;
-    if (show_menu_ && ImGui::GetIO().WantCaptureMouse) return;
+    if (ui_captures_mouse()) return;
     proto::MouseButton b;
     switch (msg) {
         case WM_LBUTTONDOWN:
@@ -562,16 +580,38 @@ void App::process_client() {
         if (!stream->notes.empty()) toast(stream->notes);
     }
     session_->set_simulated_loss(settings_.client.simulate_loss_percent);
+    session_->set_audio_output(settings_.client.stream.audio_volume, settings_.client.stream.audio_buffer_ms);
 }
 
 // ------------------------------------------------------------------------------------------------ teclado
 
 bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
-    if (!streaming() || GetForegroundWindow() != hwnd_) return false;
     const bool down = wp == WM_KEYDOWN || wp == WM_SYSKEYDOWN;
-    const bool ctrl = (GetAsyncKeyState(VK_CONTROL) & 0x8000) != 0;
-    const bool alt = (GetAsyncKeyState(VK_MENU) & 0x8000) != 0;
-    const bool shift = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
+    // Estado propio de los modificadores: cuando las teclas se reenvían al host se "tragan" y Windows no
+    // las registra, así que GetAsyncKeyState no sirve para detectar los atajos.
+    switch (k.vkCode) {
+        case VK_LCONTROL:
+        case VK_RCONTROL:
+        case VK_CONTROL:
+            mod_ctrl_[k.vkCode == VK_RCONTROL ? 1 : 0] = down;
+            break;
+        case VK_LMENU:
+        case VK_RMENU:
+        case VK_MENU:
+            mod_alt_[k.vkCode == VK_RMENU ? 1 : 0] = down;
+            break;
+        case VK_LSHIFT:
+        case VK_RSHIFT:
+        case VK_SHIFT:
+            mod_shift_[k.vkCode == VK_RSHIFT ? 1 : 0] = down;
+            break;
+        default:
+            break;
+    }
+    if (!streaming() || GetForegroundWindow() != hwnd_) return false;
+    const bool ctrl = mod_ctrl_[0] || mod_ctrl_[1];
+    const bool alt = mod_alt_[0] || mod_alt_[1];
+    const bool shift = mod_shift_[0] || mod_shift_[1];
     if (ctrl && alt && shift) {
         const DWORD vk = k.vkCode;
         bool handled = true;
@@ -614,8 +654,7 @@ bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
 // ------------------------------------------------------------------------------------------------ WndProc
 
 LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
-    const bool forward_input = streaming() && control_enabled() && !(show_menu_ && ImGui::GetCurrentContext() &&
-                                                                      ImGui::GetIO().WantCaptureMouse);
+    const bool forward_input = streaming() && control_enabled() && !ui_captures_mouse();
     if (ImGui::GetCurrentContext() != nullptr && !(streaming() && !show_menu_ && !pin_modal_open_ &&
                                                    (msg == WM_KEYDOWN || msg == WM_KEYUP || msg == WM_CHAR))) {
         if (ImGui_ImplWin32_WndProcHandler(hwnd, msg, wp, lp)) return 1;
@@ -708,7 +747,7 @@ LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         case WM_SETCURSOR:
             if (LOWORD(lp) == HTCLIENT && streaming() && control_enabled() && !relative_mouse_ &&
-                !(show_menu_ && ImGui::GetIO().WantCaptureMouse)) {
+                !ui_captures_mouse()) {
                 SetCursor(remote_cursor_visible_ ? (remote_cursor_ ? remote_cursor_ : LoadCursorW(nullptr, IDC_ARROW)) : nullptr);
                 return TRUE;
             }
@@ -752,6 +791,7 @@ LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_KILLFOCUS:
         case WM_ACTIVATEAPP:
             if (msg == WM_KILLFOCUS || wp == FALSE) {
+                mod_ctrl_[0] = mod_ctrl_[1] = mod_alt_[0] = mod_alt_[1] = mod_shift_[0] = mod_shift_[1] = false;
                 if (session_ && session_->state() == client::State::Connected) {
                     session_->send_message(proto::encode(proto::MsgType::ReleaseAll));
                 }
@@ -899,7 +939,7 @@ void App::render() {
     const std::uint64_t now = gpu::now_us();
     // En "solo ver" el cursor remoto se dibuja encima, así que hay que redibujar aunque no llegue video.
     const bool ui_active = !streaming() || show_menu_ || show_stats_ || pin_modal_open_ || now < toast_until_us_ ||
-                           !control_enabled();
+                           now < toolbar_until_us_ || !control_enabled();
     if (streaming() && !new_video && !ui_active && now - last_present_us_ < 100'000 && frame_presented_since_stream_) return;
     if (streaming() && !new_video && now - last_present_us_ < 8'000) return;  // Máx. ~120 Hz de interfaz sin video.
 

@@ -154,8 +154,8 @@ void Player::push(std::span<const std::int16_t> samples) {
     std::scoped_lock lock(mutex_);
     if (ring_.empty()) return;
     const std::size_t cap = ring_.size();
-    // Si el buffer pasa de ~80 ms se descarta lo más viejo: la latencia manda.
-    const std::size_t max_fill = static_cast<std::size_t>(format_.sample_rate) * format_.channels * 80 / 1000;
+    // Si el buffer pasa del objetivo + 60 ms se descarta lo más viejo: la latencia manda.
+    const std::size_t max_fill = static_cast<std::size_t>(format_.sample_rate) * format_.channels * (target_ms_.load() + 60) / 1000;
     for (const std::int16_t s : samples) {
         if (size_ == cap) {
             read_ = (read_ + 1) % cap;
@@ -209,7 +209,6 @@ void Player::run() {
         }
 
         const std::size_t ch = format_.channels;
-        const std::size_t prime = static_cast<std::size_t>(format_.sample_rate) * ch * 20 / 1000;  // 20 ms de colchón
         bool device_ok = true;
         while (running_ && device_ok) {
             WaitForSingleObject(event, 50);
@@ -227,13 +226,18 @@ void Player::run() {
             }
             auto* dst = reinterpret_cast<std::int16_t*>(data);
             std::size_t written = 0;
+            const std::size_t prime = static_cast<std::size_t>(format_.sample_rate) * ch * target_ms_.load() / 1000;
+            const float volume = volume_.load();
             {
                 std::scoped_lock lock(mutex_);
                 if (!primed_ && size_ >= prime) primed_ = true;
                 if (primed_) {
                     const std::size_t want = static_cast<std::size_t>(frames) * ch;
                     const std::size_t take = std::min(want, size_ - size_ % ch);
-                    for (std::size_t i = 0; i < take; ++i) dst[i] = ring_[(read_ + i) % ring_.size()];
+                    for (std::size_t i = 0; i < take; ++i) {
+                        const float v = static_cast<float>(ring_[(read_ + i) % ring_.size()]) * volume;
+                        dst[i] = static_cast<std::int16_t>(std::clamp(v, -32768.0f, 32767.0f));
+                    }
                     read_ = (read_ + take) % ring_.size();
                     size_ -= take;
                     written = take;

@@ -10,7 +10,8 @@ add_library(lancast_core STATIC
     src/toml.cpp
     src/settings.cpp
     src/geometry.cpp
-    src/protocol.cpp)
+    src/protocol.cpp
+    src/audio_resample.cpp)
 add_library(lancast::core ALIAS lancast_core)
 
 target_include_directories(lancast_core PUBLIC include)

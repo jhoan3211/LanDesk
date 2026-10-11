@@ -158,6 +158,19 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_LE(client.stream()->width, 960u);
     EXPECT_LT(reconf_ms, 500.0);
 
+    // 3b) Cambio de audio en vivo (24 kHz mono): no debe reiniciar el video (misma época).
+    const std::uint16_t epoch_before = client.stream()->epoch;
+    proto::StreamConfig cfg3 = cfg2;
+    cfg3.audio_rate = 24000;
+    cfg3.audio_channels = 1;
+    cfg3.bitrate_kbps = 15000;
+    cfg3.auto_bitrate = false;
+    client.request_stream(cfg3);
+    ASSERT_TRUE(wait_for([&] { return client.stream() && client.stream()->audio_rate == 24000; }, 3000));
+    EXPECT_EQ(client.stream()->audio_channels, 1);
+    EXPECT_EQ(client.stream()->bitrate_kbps, 15000u);
+    EXPECT_EQ(client.stream()->epoch, epoch_before) << "Un cambio de audio/bitrate no debe recrear el codificador";
+
     // 4) Transferencia de archivo (cliente -> host) con verificación.
     const fs::path src = root_ / L"origen.bin";
     {

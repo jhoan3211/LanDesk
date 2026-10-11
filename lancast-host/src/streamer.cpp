@@ -266,11 +266,11 @@ void Streamer::run() {
         }
         if (!running_) break;
         if (cfg) {
-            // Ajuste solo de bitrate: sin recrear nada.
+            // Cambios "ligeros" (bitrate, FEC, audio): se aplican sin recrear captura ni codificador.
             if (p && p->config.monitor_id == cfg->monitor_id && p->config.max_width == cfg->max_width &&
                 p->config.max_height == cfg->max_height && p->config.fps == cfg->fps && p->config.codec == cfg->codec &&
-                p->config.rate_control == cfg->rate_control && p->config.audio == cfg->audio &&
-                p->config.chroma_444 == cfg->chroma_444 && p->config.hdr == cfg->hdr) {
+                p->config.rate_control == cfg->rate_control && p->config.chroma_444 == cfg->chroma_444 &&
+                p->config.hdr == cfg->hdr) {
                 const std::uint32_t kbps = cfg->auto_bitrate
                                                ? auto_bitrate_mbps(p->stream_size.width, p->stream_size.height,
                                                                    p->info.fps, p->info.codec) * 1000
@@ -278,6 +278,8 @@ void Streamer::run() {
                 p->encoder->set_bitrate(kbps);
                 p->config = *cfg;
                 p->info.bitrate_kbps = kbps;
+                p->info.audio_rate = cfg->audio ? audio_rate : 0;
+                p->info.audio_channels = cfg->audio ? audio_channels : 0;
                 std::scoped_lock lock(mutex_);
                 current_ = p->info;
                 if (callbacks_.started) callbacks_.started(p->info);

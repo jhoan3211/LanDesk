@@ -56,6 +56,9 @@ public:
     // Encola muestras intercaladas int16 en el formato dado en start().
     void push(std::span<const std::int16_t> samples);
     [[nodiscard]] double buffered_ms() const;
+    // Volumen 0..1 y colchón objetivo (ms): se aplican al instante.
+    void set_volume(float volume) noexcept { volume_ = volume; }
+    void set_target_ms(std::uint32_t ms) noexcept { target_ms_ = ms; }
     [[nodiscard]] std::uint64_t underruns() const noexcept { return underruns_.load(); }
 
 private:
@@ -70,6 +73,8 @@ private:
     std::size_t size_ = 0;
     bool primed_ = false;
     std::atomic<std::uint64_t> underruns_{0};
+    std::atomic<float> volume_{1.0f};
+    std::atomic<std::uint32_t> target_ms_{20};
 };
 
 }  // namespace lancast::audio

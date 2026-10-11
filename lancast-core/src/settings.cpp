@@ -40,6 +40,10 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("scaling", std::string{kScalingNames[static_cast<int>(s.scaling)]});
     t.set("vsync", s.vsync);
     t.set("audio", s.audio);
+    t.set("audio_sample_rate", static_cast<std::int64_t>(s.audio_sample_rate));
+    t.set("audio_stereo", s.audio_stereo);
+    t.set("audio_volume", static_cast<std::int64_t>(s.audio_volume));
+    t.set("audio_buffer_ms", static_cast<std::int64_t>(s.audio_buffer_ms));
     t.set("fec_percent", static_cast<std::int64_t>(s.fec_percent));
 }
 
@@ -59,6 +63,11 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.scaling = enum_from(t.get_string("scaling").value_or(""), kScalingNames, s.scaling);
     s.vsync = t.get_bool("vsync").value_or(s.vsync);
     s.audio = t.get_bool("audio").value_or(s.audio);
+    s.audio_sample_rate = clamp_u32(t.get_int("audio_sample_rate").value_or(0), 0, 192000);
+    if (s.audio_sample_rate != 0 && s.audio_sample_rate < 8000) s.audio_sample_rate = 8000;
+    s.audio_stereo = t.get_bool("audio_stereo").value_or(s.audio_stereo);
+    s.audio_volume = clamp_u32(t.get_int("audio_volume").value_or(s.audio_volume), 0, 100);
+    s.audio_buffer_ms = clamp_u32(t.get_int("audio_buffer_ms").value_or(s.audio_buffer_ms), 5, 200);
     s.fec_percent = clamp_u32(t.get_int("fec_percent").value_or(s.fec_percent), 0, 50);
     return s;
 }

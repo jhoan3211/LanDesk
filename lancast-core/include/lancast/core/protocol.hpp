@@ -19,7 +19,7 @@
 namespace lancast::proto {
 
 inline constexpr std::uint32_t kMagic = 0x534E434C;  // "LCNS"
-inline constexpr std::uint16_t kVersion = 1;
+inline constexpr std::uint16_t kVersion = 2;
 inline constexpr std::size_t kMaxFrame = 32u * 1024 * 1024;
 
 using DeviceId = std::array<std::uint8_t, 16>;
@@ -164,6 +164,8 @@ struct StreamConfig {
     bool hdr = false;
     bool audio = true;
     std::uint8_t fec_percent = 15;
+    std::uint32_t audio_rate = 0;     // 0 = la del sistema del host.
+    std::uint8_t audio_channels = 2;  // 1 = mono, 2 = estéreo.
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };

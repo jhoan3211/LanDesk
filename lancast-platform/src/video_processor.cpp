@@ -1,5 +1,6 @@
 #include "lancast/platform/video_processor.hpp"
 
+#include "lancast/core/log.hpp"
 #include "win.hpp"
 
 namespace lancast::gpu {
@@ -64,7 +65,8 @@ bool VideoProcessor::process(ID3D11Texture2D* input, UINT input_slice, ID3D11Tex
         d.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
         d.Texture2D.MipSlice = 0;
         d.Texture2D.ArraySlice = input_slice;
-        if (FAILED(video_device_->CreateVideoProcessorInputView(input, enumerator_.Get(), &d, &in_view))) {
+        if (const HRESULT hr = video_device_->CreateVideoProcessorInputView(input, enumerator_.Get(), &d, &in_view); FAILED(hr)) {
+            log::warn("Procesador de video: vista de entrada falló (0x{:08X})", static_cast<std::uint32_t>(hr));
             input_views_.erase({input, input_slice});
             return false;
         }
@@ -74,7 +76,8 @@ bool VideoProcessor::process(ID3D11Texture2D* input, UINT input_slice, ID3D11Tex
     if (!out_view) {
         D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC d{};
         d.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
-        if (FAILED(video_device_->CreateVideoProcessorOutputView(output, enumerator_.Get(), &d, &out_view))) {
+        if (const HRESULT hr = video_device_->CreateVideoProcessorOutputView(output, enumerator_.Get(), &d, &out_view); FAILED(hr)) {
+            log::warn("Procesador de video: vista de salida falló (0x{:08X})", static_cast<std::uint32_t>(hr));
             output_views_.erase(output);
             return false;
         }
@@ -108,7 +111,9 @@ bool VideoProcessor::process(ID3D11Texture2D* input, UINT input_slice, ID3D11Tex
     D3D11_VIDEO_PROCESSOR_STREAM stream{};
     stream.Enable = TRUE;
     stream.pInputSurface = in_view.Get();
-    return SUCCEEDED(ctx->VideoProcessorBlt(proc, out_view.Get(), 0, 1, &stream));
+    const HRESULT hr = ctx->VideoProcessorBlt(proc, out_view.Get(), 0, 1, &stream);
+    if (FAILED(hr)) log::warn("VideoProcessorBlt falló (0x{:08X})", static_cast<std::uint32_t>(hr));
+    return SUCCEEDED(hr);
 }
 
 }  // namespace lancast::gpu

@@ -36,6 +36,10 @@ struct StreamSettings {
     ScalingMode scaling = ScalingMode::Fit;
     bool vsync = false;
     bool audio = true;
+    std::uint32_t audio_sample_rate = 0;  // 0 = la del sistema del host (normalmente 48000).
+    bool audio_stereo = true;
+    std::uint32_t audio_volume = 100;     // 0..100, se aplica en el cliente.
+    std::uint32_t audio_buffer_ms = 20;   // Colchón de reproducción del cliente (menos = menor latencia).
     std::uint32_t fec_percent = 15;
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;

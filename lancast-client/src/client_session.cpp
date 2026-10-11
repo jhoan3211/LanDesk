@@ -240,6 +240,10 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
         fail(ack->message);
         return false;
     }
+    if (ack->version != proto::kVersion) {
+        fail("Versión de LanCast distinta en el otro equipo. Instala la misma versión en los dos PC.");
+        return false;
+    }
 
     const crypto::Digest th = session::transcript(hello_raw, ack_raw);
     const auto z = ecdh.derive(ack->public_key);
