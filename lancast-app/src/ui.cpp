@@ -6,6 +6,8 @@
 
 #include "app.hpp"
 #include "app_internal.hpp"
+#include "lancast/core/encoding.hpp"
+#include "lancast/core/version.hpp"
 #include "ui_common.hpp"
 #include "imgui.h"
 #include "lancast/core/bitrate.hpp"
@@ -74,6 +76,7 @@ void App::draw_ui() {
         draw_sidebar();
         ImGui::SameLine();
         ImGui::BeginChild("##page", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_NoBackground);
+        draw_update_banner();
         switch (page_) {
             case Page::Connect:
                 draw_connect_page();
@@ -105,7 +108,7 @@ void App::draw_sidebar() {
     ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.6f);
     ImGui::TextColored(kAccent, "LanCast");
     ImGui::PopFont();
-    ImGui::TextColored(kMuted, "%s · v1.2.0", settings_.device_name.c_str());
+    ImGui::TextColored(kMuted, "%s · v%s", settings_.device_name.c_str(), std::string{kAppVersion}.c_str());
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -136,6 +139,40 @@ void App::draw_sidebar() {
         ImGui::TextColored(kBad, "● Host con error");
     }
     ImGui::EndChild();
+}
+
+void App::draw_update_banner() {
+    std::scoped_lock lock(update_mutex_);
+    if (update_dismissed_ || !update_info_ ||
+        (update_state_ != UpdateState::Available && update_state_ != UpdateState::Downloading &&
+         !(update_state_ == UpdateState::Failed && update_info_))) {
+        return;
+    }
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, ImVec4(0.12f, 0.24f, 0.42f, 1.0f));
+    ImGui::BeginChild("##update", ImVec2(0, 0), ImGuiChildFlags_Borders | ImGuiChildFlags_AutoResizeY);
+    ImGui::TextColored(kAccent, "LanCast %s disponible", update_info_->tag.c_str());
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "(tienes la %s)", std::string{kAppVersion}.c_str());
+    if (update_state_ == UpdateState::Downloading) {
+        const float frac = update_total_ ? static_cast<float>(static_cast<double>(update_done_) / static_cast<double>(update_total_)) : 0.f;
+        ImGui::ProgressBar(frac, ImVec2(-1, 0), std::format("Descargando… {}", human_bytes(update_done_)).c_str());
+    } else {
+        if (update_state_ == UpdateState::Failed) ImGui::TextColored(kBad, "%s", update_message_.c_str());
+        if (primary_button("Actualizar ahora")) {
+            update_state_ = UpdateState::Available;
+            update_mutex_.unlock();
+            start_update_download();
+            update_mutex_.lock();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Ver novedades") && !update_info_->page_url.empty()) sys::open_url(update_info_->page_url);
+        ImGui::SameLine();
+        if (ImGui::Button("Más tarde")) update_dismissed_ = true;
+        ImGui::TextColored(kMuted, "Se descarga de GitHub, se verifica (SHA-256) y LanCast se reinicia solo.");
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::Spacing();
 }
 
 }  // namespace lancast::app

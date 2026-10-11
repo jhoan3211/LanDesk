@@ -148,3 +148,27 @@ TEST_F(VideoPipeline, CaptureConvertEncodeDecode) {
         }
     }
 }
+
+// Prueba en red contra GitHub (solo con LANCAST_NETWORK_TESTS=1).
+#include "lancast/platform/updater.hpp"
+
+TEST(Updater, ChecksGitHubAndRefusesUnverifiedDownloads) {
+    char flag[8]{};
+    if (GetEnvironmentVariableA("LANCAST_NETWORK_TESTS", flag, sizeof(flag)) == 0) GTEST_SKIP() << "sin LANCAST_NETWORK_TESTS";
+    auto latest = update::check(Version{1, 0, 0});
+    ASSERT_TRUE(latest.has_value()) << latest.error().message();
+    ASSERT_TRUE(latest->has_value());
+    std::printf("  Última versión: %s (%llu bytes) sha256=%s\n", (*latest)->tag.c_str(),
+                static_cast<unsigned long long>((*latest)->size), (*latest)->sha256.empty() ? "(no publicado)" : (*latest)->sha256.c_str());
+    EXPECT_FALSE((*latest)->download_url.empty());
+    if ((*latest)->sha256.empty()) {
+        const auto file = update::download(**latest, {});
+        EXPECT_FALSE(file.has_value());  // Sin hash publicado no se instala.
+    } else {
+        const auto file = update::download(**latest, {});
+        ASSERT_TRUE(file.has_value()) << file.error().message();
+        std::filesystem::remove(*file);
+    }
+    EXPECT_FALSE(update::check(Version{999, 0, 0}).value().has_value());  // Ya al día.
+    EXPECT_EQ(update::find_sha256("x\nSHA-256: `" + std::string(64, 'A') + "`"), std::string(64, 'a'));
+}

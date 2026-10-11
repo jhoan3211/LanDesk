@@ -19,6 +19,7 @@
 #include "lancast/host/host_service.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/system.hpp"
+#include "lancast/platform/updater.hpp"
 #include "renderer.hpp"
 
 struct ImFont;
@@ -66,6 +67,9 @@ private:
     void start_connect(const std::string& address);
     void disconnect_client(bool keep_view = false);
     void draw_reconnect_overlay();
+    void check_updates(bool manual);
+    void start_update_download();
+    void draw_update_banner();
     [[nodiscard]] bool streaming() const;
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
@@ -159,6 +163,19 @@ private:
     client::State last_client_state_ = client::State::Idle;
     std::uint16_t last_stream_epoch_ = 0xFFFF;
     std::string new_profile_name_;
+
+    // Actualización automática (hilo propio; estado protegido por update_mutex_).
+    enum class UpdateState { Idle, Checking, UpToDate, Available, Downloading, Ready, Failed };
+    std::mutex update_mutex_;
+    UpdateState update_state_ = UpdateState::Idle;
+    std::optional<update::ReleaseInfo> update_info_;
+    std::filesystem::path update_file_;
+    std::string update_message_;
+    std::uint64_t update_done_ = 0;
+    std::uint64_t update_total_ = 0;
+    bool update_dismissed_ = false;
+    std::atomic<bool> update_cancel_{false};
+    std::thread update_thread_;
 
     // Reconexión automática tras un corte de red.
     bool was_connected_ = false;

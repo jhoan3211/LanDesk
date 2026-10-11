@@ -6,6 +6,7 @@
 
 #include "app.hpp"
 #include "app_internal.hpp"
+#include "lancast/core/version.hpp"
 #include "ui_common.hpp"
 #include "imgui.h"
 #include "lancast/core/bitrate.hpp"
@@ -587,6 +588,32 @@ void App::draw_settings_page() {
         changed = true;
     }
     changed |= ImGui::Checkbox("Al cerrar la ventana, seguir en la bandeja (para recibir conexiones)", &settings_.minimize_to_tray);
+
+    section("Actualizaciones");
+    changed |= ImGui::Checkbox("Buscar versiones nuevas al iniciar", &settings_.check_updates);
+    ImGui::SameLine();
+    if (ImGui::Button("Buscar ahora")) check_updates(true);
+    {
+        std::scoped_lock lock(update_mutex_);
+        switch (update_state_) {
+            case UpdateState::Checking:
+                ImGui::TextColored(kMuted, "Buscando…");
+                break;
+            case UpdateState::UpToDate:
+                ImGui::TextColored(kGood, "Tienes la última versión (%s)", std::string{kAppVersion}.c_str());
+                break;
+            case UpdateState::Available:
+            case UpdateState::Downloading:
+                ImGui::TextColored(kAccent, "Disponible: %s (mira el aviso de arriba)", update_info_ ? update_info_->tag.c_str() : "");
+                break;
+            case UpdateState::Failed:
+                ImGui::TextColored(kWarn, "%s", update_message_.c_str());
+                break;
+            default:
+                ImGui::TextColored(kMuted, "Versión actual: %s", std::string{kAppVersion}.c_str());
+                break;
+        }
+    }
 
     section("Carpetas de recepción");
     auto folder_row = [&](const char* label, std::string& value) {

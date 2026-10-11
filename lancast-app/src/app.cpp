@@ -105,6 +105,8 @@ App::App(LaunchOptions options) : options_(std::move(options)) {
 App::~App() {
     discovery_running_ = false;
     if (discovery_thread_.joinable()) discovery_thread_.join();
+    update_cancel_ = true;
+    if (update_thread_.joinable()) update_thread_.join();
     disconnect_client();
     host_.stop();
     if (keyboard_hook_ != nullptr) UnhookWindowsHookEx(keyboard_hook_);
@@ -279,6 +281,8 @@ int App::run() {
     ShowWindow(hwnd_, options_.minimized ? SW_HIDE : SW_SHOW);
     if (!options_.minimized) UpdateWindow(hwnd_);
     if (options_.connect) start_connect(*options_.connect);
+    std::thread([] { update::cleanup_previous(); }).detach();  // Borra el .old de una actualización anterior.
+    if (settings_.check_updates) check_updates(false);
 
     std::uint64_t last_host_poll = 0;
     while (running_) {
@@ -298,6 +302,28 @@ int App::run() {
 
         send_mouse_position();
         process_client();
+
+        // Actualización descargada y verificada: reemplazar el .exe y reiniciar.
+        {
+            std::filesystem::path ready;
+            {
+                std::scoped_lock lock(update_mutex_);
+                if (update_state_ == UpdateState::Ready) {
+                    ready = update_file_;
+                    update_state_ = UpdateState::Idle;
+                }
+            }
+            if (!ready.empty()) {
+                if (auto r = update::install_and_restart(ready)) {
+                    running_ = false;
+                    break;
+                } else {
+                    std::scoped_lock lock(update_mutex_);
+                    update_state_ = UpdateState::Failed;
+                    update_message_ = r.error().message();
+                }
+            }
+        }
 
         const std::uint64_t now = gpu::now_us();
         if (now - last_host_poll > 250'000) {
@@ -484,6 +510,66 @@ void App::save_settings() {
 void App::toast(std::string text) {
     toast_ = std::move(text);
     toast_until_us_ = gpu::now_us() + 4'000'000;
+}
+
+void App::check_updates(bool manual) {
+    {
+        std::scoped_lock lock(update_mutex_);
+        if (update_state_ == UpdateState::Checking || update_state_ == UpdateState::Downloading) return;
+        update_state_ = UpdateState::Checking;
+        update_message_.clear();
+        if (manual) update_dismissed_ = false;
+    }
+    if (update_thread_.joinable()) update_thread_.join();
+    update_thread_ = std::thread([this, manual] {
+        if (!manual) Sleep(3000);  // No competir con el arranque.
+        const auto current = parse_version(kAppVersion).value_or(Version{});
+        auto result = update::check(current);
+        std::scoped_lock lock(update_mutex_);
+        if (!result) {
+            update_state_ = UpdateState::Failed;
+            update_message_ = result.error().message();
+            log::info("Búsqueda de actualizaciones: {}", update_message_);
+        } else if (!*result) {
+            update_state_ = UpdateState::UpToDate;
+        } else {
+            update_info_ = **result;
+            update_state_ = UpdateState::Available;
+            log::info("Hay una versión nueva: {}", update_info_->tag);
+        }
+    });
+}
+
+void App::start_update_download() {
+    std::optional<update::ReleaseInfo> info;
+    {
+        std::scoped_lock lock(update_mutex_);
+        if (update_state_ != UpdateState::Available || !update_info_) return;
+        update_state_ = UpdateState::Downloading;
+        update_done_ = 0;
+        update_total_ = update_info_->size;
+        info = update_info_;
+    }
+    if (update_thread_.joinable()) update_thread_.join();
+    update_cancel_ = false;
+    update_thread_ = std::thread([this, release = *info] {
+        auto file = update::download(
+            release,
+            [this](std::uint64_t done, std::uint64_t total) {
+                std::scoped_lock lock(update_mutex_);
+                update_done_ = done;
+                if (total != 0) update_total_ = total;
+            },
+            &update_cancel_);
+        std::scoped_lock lock(update_mutex_);
+        if (!file) {
+            update_state_ = UpdateState::Failed;
+            update_message_ = file.error().message();
+            return;
+        }
+        update_file_ = *file;
+        update_state_ = UpdateState::Ready;
+    });
 }
 
 }  // namespace lancast::app

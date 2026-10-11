@@ -16,6 +16,7 @@
 #include "app.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
+#include "lancast/core/version.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
 #include "lancast/platform/platform.hpp"
@@ -92,7 +93,7 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     lancast::platform::enable_per_monitor_dpi_awareness();
     lancast::log::set_file(lancast::sys::app_data_dir() / (opts.no_host ? L"lancast-client.log" : L"lancast.log"));
-    lancast::log::info("LanCast 1.2.0 iniciado");
+    lancast::log::info("LanCast {} iniciado", lancast::kAppVersion);
     timeBeginPeriod(1);  // Temporizadores de 1 ms para el ritmo de captura y presentación.
 
     int code = 0;

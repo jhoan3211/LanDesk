@@ -89,6 +89,7 @@ struct AppSettings {
     std::string device_name;  // Nombre visible (por defecto, el nombre del equipo).
     bool start_with_windows = false;
     bool minimize_to_tray = true;
+    bool check_updates = true;  // Buscar versiones nuevas en GitHub al iniciar.
     HostSettings host;
     ClientSettings client;
 };

@@ -133,6 +133,7 @@ std::string settings_to_toml(const AppSettings& s) {
     root.set("device_name", s.device_name);
     root.set("start_with_windows", s.start_with_windows);
     root.set("minimize_to_tray", s.minimize_to_tray);
+    root.set("check_updates", s.check_updates);
 
     toml::Table& h = doc.table_mut("host");
     h.set("enabled", s.host.enabled);
@@ -178,6 +179,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.device_name = root->get_string("device_name").value_or("");
         s.start_with_windows = root->get_bool("start_with_windows").value_or(s.start_with_windows);
         s.minimize_to_tray = root->get_bool("minimize_to_tray").value_or(s.minimize_to_tray);
+        s.check_updates = root->get_bool("check_updates").value_or(s.check_updates);
     }
     if (const toml::Table* h = doc.table("host")) {
         s.host.enabled = h->get_bool("enabled").value_or(s.host.enabled);
