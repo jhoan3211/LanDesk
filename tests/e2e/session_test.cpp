@@ -11,6 +11,7 @@
 
 #include "lancast/client/client_session.hpp"
 #include "lancast/core/encoding.hpp"
+#include "lancast/core/log.hpp"
 #include "lancast/host/host_service.hpp"
 #include "lancast/platform/crypto.hpp"
 #include "lancast/platform/d3d.hpp"
@@ -80,6 +81,8 @@ protected:
         fs::remove_all(root_, ec);
         fs::create_directories(root_ / L"data");
         SetEnvironmentVariableW(L"LANCAST_DATA_DIR", (root_ / L"data").c_str());
+        log::set_min_level(log::Level::Debug);
+        log::set_file(root_ / L"e2e.log");
     }
 
     net::WinsockScope winsock_;
@@ -244,6 +247,18 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
                                       again.state() == client::State::Failed; },
                          5000));
     EXPECT_EQ(again.state(), client::State::Connected) << again.message();
+
+    // 5b) El mismo equipo vuelve a conectar sin cerrar la sesión anterior (como tras un corte de red):
+    // el host reemplaza la sesión vieja y la vieja queda "reintentable".
+    client::ClientSession third(client_settings);
+    third.connect({0x7F000001, kPort}, make_caps("Cliente-Prueba"), make_config());
+    ASSERT_TRUE(wait_for([&] { return third.state() == client::State::Connected || third.state() == client::State::Failed; }, 8000));
+    EXPECT_EQ(third.state(), client::State::Connected) << third.message();
+    ASSERT_TRUE(wait_for([&] { return again.state() == client::State::Closed; }, 5000));
+    EXPECT_TRUE(again.should_retry()) << again.message();
+    third.disconnect();
+    ASSERT_TRUE(wait_for([&] { return !host.status().session_active; }, 5000));
+    EXPECT_FALSE(third.should_retry());  // Desconexión del usuario: no se reintenta.
     again.disconnect();
     ASSERT_TRUE(wait_for([&] { return !host.status().session_active; }, 5000));
 

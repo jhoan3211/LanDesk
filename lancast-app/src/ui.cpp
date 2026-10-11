@@ -94,6 +94,7 @@ void App::draw_ui() {
         ImGui::EndChild();
         ImGui::End();
     }
+    draw_reconnect_overlay();
     draw_pin_modal();
     draw_toast();
 }

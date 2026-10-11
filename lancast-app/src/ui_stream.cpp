@@ -368,4 +368,18 @@ void App::draw_toast() {
     ImGui::End();
 }
 
+void App::draw_reconnect_overlay() {
+    if (!reconnecting_ || streaming()) return;
+    const double left = reconnect_deadline_us_ > gpu::now_us() ? (reconnect_deadline_us_ - gpu::now_us()) / 1e6 : 0.0;
+    ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowBgAlpha(0.95f);
+    ImGui::Begin("##reconnect", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize);
+    const char* spinner = "|/-\\";
+    ImGui::TextColored(kWarn, "Se perdió la conexión con %s", reconnect_host_name_.c_str());
+    ImGui::Text("%c  Reconectando… intento %d (quedan %.0f s)", spinner[static_cast<int>(ImGui::GetTime() * 8) % 4],
+                reconnect_attempts_, left);
+    if (ImGui::Button("Cancelar")) disconnect_client();
+    ImGui::End();
+}
+
 }  // namespace lancast::app

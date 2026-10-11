@@ -105,6 +105,8 @@ ClientSession::~ClientSession() {
 void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& caps, const proto::StreamConfig& initial) {
     disconnect();
     stopping_ = false;
+    user_disconnect_ = false;
+    retryable_ = false;
     {
         std::scoped_lock lock(mutex_);
         host_ = host;
@@ -129,6 +131,7 @@ void ClientSession::submit_pin(const std::string& pin) {
 }
 
 void ClientSession::disconnect() {
+    user_disconnect_ = true;
     stopping_ = true;
     cv_.notify_all();
     {
@@ -183,7 +186,8 @@ void ClientSession::set_state(State s, std::string msg) {
     if (!msg.empty() || s == State::Connected) message_ = std::move(msg);
 }
 
-void ClientSession::fail(const std::string& msg) {
+void ClientSession::fail(const std::string& msg, bool retryable) {
+    retryable_ = retryable && !user_disconnect_;
     log::warn("Cliente: {}", msg);
     set_state(State::Failed, msg);
 }
@@ -228,7 +232,7 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
 
     std::vector<std::uint8_t> ack_raw;
     if (!stream.recv_frame(ack_raw, kHandshakeMax)) {
-        fail("El host no respondió (¿versión distinta de LanCast?)");
+        fail("El host no respondió (¿versión distinta de LanCast?)", true);
         return false;
     }
     const auto ack = parse<proto::HelloAck>(ack_raw, proto::MsgType::HelloAck);
@@ -241,7 +245,8 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
         host_name_ = ack->device_name;
     }
     if (!ack->accepted) {
-        fail(ack->message);
+        // "Ocupado" es reintentable (la sesión vieja puede estar cerrándose); un bloqueo por PIN no.
+        fail(ack->message, ack->message.find("sesión activa") != std::string::npos);
         return false;
     }
     if (ack->version != proto::kVersion) {
@@ -352,7 +357,7 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
 void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, proto::StreamConfig initial) {
     auto stream = net::TcpStream::connect(host, 4000);
     if (!stream) {
-        fail(std::format("No se pudo conectar a {}: {}", host.to_string(), stream.error().message()));
+        fail(std::format("No se pudo conectar a {}: {}", host.to_string(), stream.error().message()), true);
         return;
     }
     if (!handshake(*stream, host)) return;
@@ -466,6 +471,7 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
         if (state_ == State::Connected) {
             state_ = State::Closed;
             message_ = close_reason.empty() ? "Se perdió la conexión con el host" : close_reason;
+            retryable_ = close_reason.empty() && !user_disconnect_;  // Corte de red, no un cierre explícito.
         }
     }
     SetEvent(frame_event_);

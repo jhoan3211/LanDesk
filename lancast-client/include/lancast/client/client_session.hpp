@@ -85,6 +85,9 @@ public:
     void disconnect();
 
     [[nodiscard]] State state() const;
+    // true si la sesión terminó por un problema de red (no por el usuario, el host o la autenticación):
+    // la interfaz puede reconectar sola.
+    [[nodiscard]] bool should_retry() const noexcept { return retryable_.load(); }
     [[nodiscard]] std::string message() const;
     [[nodiscard]] std::string host_name() const;
     [[nodiscard]] net::Endpoint host_endpoint() const;
@@ -128,7 +131,7 @@ private:
     void media_thread();
     void handle_video(std::span<const std::uint8_t> payload);
     void handle_audio(std::span<const std::uint8_t> payload);
-    void fail(const std::string& msg);
+    void fail(const std::string& msg, bool retryable = false);
     void set_state(State s, std::string msg = {});
 
     AppSettings settings_;
@@ -140,6 +143,8 @@ private:
     net::Endpoint host_;
     std::optional<std::string> pin_;
     std::atomic<bool> stopping_{false};
+    std::atomic<bool> user_disconnect_{false};
+    std::atomic<bool> retryable_{false};
     std::thread control_;
     std::thread media_;
 

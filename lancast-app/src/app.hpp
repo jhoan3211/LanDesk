@@ -64,7 +64,8 @@ private:
 
     // Sesión de cliente
     void start_connect(const std::string& address);
-    void disconnect_client();
+    void disconnect_client(bool keep_view = false);
+    void draw_reconnect_overlay();
     [[nodiscard]] bool streaming() const;
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
@@ -158,6 +159,16 @@ private:
     client::State last_client_state_ = client::State::Idle;
     std::uint16_t last_stream_epoch_ = 0xFFFF;
     std::string new_profile_name_;
+
+    // Reconexión automática tras un corte de red.
+    bool was_connected_ = false;
+    bool reconnecting_ = false;
+    std::string reconnect_address_;
+    std::string last_connect_address_;
+    std::string reconnect_host_name_;
+    std::uint64_t reconnect_deadline_us_ = 0;
+    std::uint64_t next_reconnect_us_ = 0;
+    int reconnect_attempts_ = 0;
 
     // UI
     Page page_ = Page::Connect;

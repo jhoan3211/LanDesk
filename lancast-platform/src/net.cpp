@@ -98,21 +98,20 @@ WinsockScope::WinsockScope() {
 
 WinsockScope::~WinsockScope() { WSACleanup(); }
 
-bool Socket::valid() const noexcept { return as_socket(s_) != INVALID_SOCKET; }
+bool Socket::valid() const noexcept { return as_socket(s_.load()) != INVALID_SOCKET; }
 
-std::uintptr_t Socket::release() noexcept {
-    const std::uintptr_t s = s_;
-    s_ = static_cast<std::uintptr_t>(INVALID_SOCKET);
-    return s;
-}
+std::uintptr_t Socket::release() noexcept { return s_.exchange(static_cast<std::uintptr_t>(INVALID_SOCKET)); }
 
 void Socket::close() noexcept {
-    if (valid()) closesocket(as_socket(s_));
-    s_ = static_cast<std::uintptr_t>(INVALID_SOCKET);
+    const std::uintptr_t s = s_.exchange(static_cast<std::uintptr_t>(INVALID_SOCKET));
+    if (as_socket(s) != INVALID_SOCKET) closesocket(as_socket(s));
 }
 
 void Socket::shutdown() noexcept {
-    if (valid()) ::shutdown(as_socket(s_), SD_BOTH);
+    const std::uintptr_t s = s_.exchange(static_cast<std::uintptr_t>(INVALID_SOCKET));
+    if (as_socket(s) == INVALID_SOCKET) return;
+    ::shutdown(as_socket(s), SD_BOTH);  // Avisa al otro extremo (FIN)...
+    closesocket(as_socket(s));          // ...y despierta a los hilos bloqueados en este socket.
 }
 
 platform::Result<TcpStream> TcpStream::connect(const Endpoint& to, std::uint32_t timeout_ms) {

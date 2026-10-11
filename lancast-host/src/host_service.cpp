@@ -45,6 +45,7 @@ std::array<std::uint8_t, 16> parse_device_id(const std::string& hex) {
 }  // namespace
 
 struct Session {
+    std::string client_id;  // Id del equipo cliente (hex).
     std::unique_ptr<net::SecureChannel> channel;
     session::Keys keys;
     std::array<std::uint8_t, 16> session_id{};
@@ -329,7 +330,9 @@ struct HostService::Impl {
             if (f.first >= kMaxFailures && gpu::now_us() - f.second < kLockoutUs) {
                 ack.accepted = false;
                 ack.message = "Demasiados intentos fallidos. Espera 10 minutos.";
-            } else if (session || handshake_in_progress) {
+            } else if ((session && session->client_id != client_id) || handshake_in_progress) {
+                // Si es el mismo equipo que ya tiene sesión (se reconecta tras un corte), se le deja autenticarse:
+                // la sesión vieja se reemplaza solo después de que demuestre su identidad.
                 ack.accepted = false;
                 ack.message = session ? std::format("{} ya tiene una sesión activa", settings.device_name)
                                       : "Hay otro emparejamiento en curso";
@@ -426,6 +429,7 @@ struct HostService::Impl {
         s->keys = session::derive_keys(*z, auth_key, th);
         crypto::random_bytes(s->session_id);
         s->client_name = hello->device_name;
+        s->client_id = client_id;
         s->address = peer;
         s->started_us = gpu::now_us();
 
@@ -444,8 +448,20 @@ struct HostService::Impl {
         s->channel = std::make_unique<net::SecureChannel>(std::move(stream), s->keys.control_h2c, s->keys.control_c2h);
         s->media = std::make_unique<net::MediaSender>(media_socket, s->keys.media_h2c);
         s->media_rx = std::make_unique<net::DatagramCipher>(s->keys.media_c2h);
+        // Reconexión del mismo equipo: cerrar la sesión anterior (quedó colgada por el corte de red).
+        std::shared_ptr<Session> old;
         {
             std::scoped_lock lock(mutex);
+            if (session && session->client_id == client_id) old = session;
+        }
+        if (old) {
+            log::info("{} se reconectó: se reemplaza la sesión anterior", hello->device_name);
+            old->channel->shutdown();
+            for (int i = 0; i < 150 && current() == old; ++i) Sleep(20);
+        }
+        {
+            std::scoped_lock lock(mutex);
+            if (session) return;  // Otra sesión ganó la carrera.
             s->view_only = force_view_only;
             session = s;
         }

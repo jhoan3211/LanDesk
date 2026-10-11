@@ -2,6 +2,7 @@
 
 // Sockets IPv4 (Winsock) para LAN: TCP con tramas, UDP y utilidades de direcciones.
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <optional>
@@ -53,14 +54,15 @@ public:
     Socket& operator=(const Socket&) = delete;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] std::uintptr_t handle() const noexcept { return s_; }
+    [[nodiscard]] std::uintptr_t handle() const noexcept { return s_.load(); }
     std::uintptr_t release() noexcept;
     void close() noexcept;
-    // Desbloquea operaciones pendientes en otros hilos (recv/accept devuelven error).
+    // Termina la conexión desde cualquier hilo: en Windows solo cerrar el socket despierta a otro hilo
+    // bloqueado en recv/accept (shutdown() por sí solo no lo hace).
     void shutdown() noexcept;
 
 private:
-    std::uintptr_t s_ = ~std::uintptr_t{0};
+    std::atomic<std::uintptr_t> s_{~std::uintptr_t{0}};
 };
 
 class TcpStream {

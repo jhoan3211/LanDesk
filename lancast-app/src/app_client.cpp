@@ -88,6 +88,7 @@ void App::switch_monitor(std::uint32_t id) {
 }
 
 void App::start_connect(const std::string& address) {
+    last_connect_address_ = address;
     const auto ep = net::Endpoint::parse(address, kDefaultControlPort);
     if (!ep) {
         toast("Dirección no válida. Usa IP o IP:puerto, por ejemplo 192.168.40.7");
@@ -125,7 +126,7 @@ void App::start_connect(const std::string& address) {
     save_settings();
 }
 
-void App::disconnect_client() {
+void App::disconnect_client(bool keep_view) {
     if (keyboard_hook_ != nullptr) {
         UnhookWindowsHookEx(keyboard_hook_);
         keyboard_hook_ = nullptr;
@@ -142,7 +143,11 @@ void App::disconnect_client() {
     pin_modal_open_ = false;
     frame_presented_since_stream_ = false;
     last_stream_epoch_ = 0xFFFF;
-    if (fullscreen_) toggle_fullscreen();
+    if (!keep_view) {
+        reconnecting_ = false;
+        was_connected_ = false;
+        if (fullscreen_) toggle_fullscreen();
+    }
 }
 
 void App::set_relative_mouse(bool on) {
@@ -211,11 +216,19 @@ void App::handle_mouse_button(UINT msg, WPARAM wp) {
 }
 
 void App::process_client() {
-    if (!session_) return;
+    if (!session_) {
+        if (reconnecting_ && gpu::now_us() >= next_reconnect_us_) {
+            ++reconnect_attempts_;
+            next_reconnect_us_ = gpu::now_us() + 2'000'000;
+            start_connect(reconnect_address_);
+        }
+        return;
+    }
     const client::State st = session_->state();
     if (st != last_client_state_) {
         switch (st) {
             case client::State::NeedPin:
+                reconnecting_ = false;  // El host ya no reconoce el emparejamiento: hace falta el PIN.
                 pin_input_.clear();
                 pin_modal_open_ = true;
                 if (options_.pin) {
@@ -227,6 +240,11 @@ void App::process_client() {
                 pin_modal_open_ = false;
                 renderer_ = std::make_unique<VideoRenderer>(device_);
                 render_boost_ = std::make_unique<sys::RealtimeThread>(L"Games");
+                if (reconnecting_) toast(std::format("Reconectado a {}", session_->host_name()));
+                reconnecting_ = false;
+                was_connected_ = true;
+                reconnect_address_ = last_connect_address_;
+                reconnect_host_name_ = session_->host_name();
                 if (keyboard_hook_ == nullptr) keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_proc, GetModuleHandleW(nullptr), 0);
                 toast(std::format("Conectado a {} · Ctrl+Alt+Shift+M abre el menú", session_->host_name()));
                 break;
@@ -235,8 +253,25 @@ void App::process_client() {
                 const std::string msg = session_->message();
                 pin_modal_open_ = false;
                 const std::string name = session_->host_name();
+                const std::uint64_t now = gpu::now_us();
+                // Corte de red con una sesión que funcionaba: reintentar sin PIN hasta 60 s.
+                if (session_->should_retry() && (was_connected_ || reconnecting_) && !reconnect_address_.empty()) {
+                    if (!reconnecting_) {
+                        reconnecting_ = true;
+                        reconnect_attempts_ = 0;
+                        reconnect_deadline_us_ = now + 60'000'000;
+                        log::info("Conexión perdida con {}: reconectando", name);
+                    }
+                    if (now < reconnect_deadline_us_) {
+                        disconnect_client(true);
+                        next_reconnect_us_ = now + 2'000'000;
+                        last_client_state_ = client::State::Idle;
+                        return;
+                    }
+                }
                 disconnect_client();
-                toast(msg.empty() ? std::format("Desconectado de {}", name) : msg);
+                toast(reconnecting_ ? std::format("No se pudo reconectar con {}", reconnect_host_name_)
+                                    : (msg.empty() ? std::format("Desconectado de {}", name) : msg));
                 last_client_state_ = client::State::Idle;
                 return;
             }
