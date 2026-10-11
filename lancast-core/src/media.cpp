@@ -91,22 +91,12 @@ void packetize_frame(std::span<const std::uint8_t> frame, const EncodedFrameInfo
         const std::size_t len = std::min(static_cast<std::size_t>(k) * kShardSize, frame.size() - offset);
         std::memcpy(block_buf.data(), frame.data() + offset, len);
 
-        if (m > 0) {
-            data_ptrs.resize(static_cast<std::size_t>(k));
-            parity_ptrs.resize(static_cast<std::size_t>(m));
-            for (int i = 0; i < k; ++i) data_ptrs[static_cast<std::size_t>(i)] = block_buf.data() + static_cast<std::size_t>(i) * kShardSize;
-            for (int i = 0; i < m; ++i) {
-                parity_ptrs[static_cast<std::size_t>(i)] = block_buf.data() + static_cast<std::size_t>(k + i) * kShardSize;
-            }
-            fec::ReedSolomon(k, m).encode(data_ptrs, parity_ptrs, kShardSize);
-        }
-
-        for (int s = 0; s < k + m; ++s) {
+        auto emit_shard = [&](int shard) {
             VideoShardHeader h;
             h.frame_id = info.frame_id;
             h.block_index = static_cast<std::uint16_t>(b);
             h.block_count = static_cast<std::uint16_t>(layout.block_count);
-            h.shard_index = static_cast<std::uint8_t>(s);
+            h.shard_index = static_cast<std::uint8_t>(shard);
             h.data_shards = static_cast<std::uint8_t>(k);
             h.parity_shards = static_cast<std::uint8_t>(m);
             h.flags = info.keyframe ? kFrameFlagKeyframe : 0;
@@ -117,8 +107,21 @@ void packetize_frame(std::span<const std::uint8_t> frame, const EncodedFrameInfo
 
             w.data().clear();
             h.write(w);
-            w.raw({block_buf.data() + static_cast<std::size_t>(s) * kShardSize, kShardSize});
+            w.raw({block_buf.data() + static_cast<std::size_t>(shard) * kShardSize, kShardSize});
             emit(w.data());
+        };
+
+        // Los fragmentos de datos salen ya; la paridad se calcula mientras viajan (menor latencia del primer paquete).
+        for (int s = 0; s < k; ++s) emit_shard(s);
+        if (m > 0) {
+            data_ptrs.resize(static_cast<std::size_t>(k));
+            parity_ptrs.resize(static_cast<std::size_t>(m));
+            for (int i = 0; i < k; ++i) data_ptrs[static_cast<std::size_t>(i)] = block_buf.data() + static_cast<std::size_t>(i) * kShardSize;
+            for (int i = 0; i < m; ++i) {
+                parity_ptrs[static_cast<std::size_t>(i)] = block_buf.data() + static_cast<std::size_t>(k + i) * kShardSize;
+            }
+            fec::ReedSolomon(k, m).encode(data_ptrs, parity_ptrs, kShardSize);
+            for (int s = k; s < k + m; ++s) emit_shard(s);
         }
     }
 }

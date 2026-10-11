@@ -18,6 +18,7 @@
 #include "lancast/core/settings.hpp"
 #include "lancast/host/host_service.hpp"
 #include "lancast/platform/d3d.hpp"
+#include "lancast/platform/system.hpp"
 #include "renderer.hpp"
 
 struct ImFont;
@@ -66,6 +67,8 @@ private:
     [[nodiscard]] bool streaming() const;
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
+    void apply_min_latency();
+    void update_presentation_mode();
     void switch_monitor(std::uint32_t id);
     void process_client();
     void set_relative_mouse(bool on);
@@ -135,6 +138,11 @@ private:
     std::uint64_t toolbar_until_us_ = 0;  // La barra superior se muestra hasta este instante.
     bool relative_mouse_ = false;
     std::optional<PointF> pending_mouse_;
+    std::uint64_t last_mouse_send_us_ = 0;
+    std::unique_ptr<sys::RealtimeThread> render_boost_;  // MMCSS del hilo de presentación durante el stream.
+    std::string presentation_mode_;                      // "directa" / "compuesta por DWM"
+    bool presentation_direct_ = false;
+    std::uint64_t last_presentation_check_us_ = 0;
     HCURSOR remote_cursor_ = nullptr;
     bool remote_cursor_visible_ = true;
     HHOOK keyboard_hook_ = nullptr;

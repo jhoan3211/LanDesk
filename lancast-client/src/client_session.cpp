@@ -462,6 +462,8 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
 }
 
 void ClientSession::media_thread() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL);
+    sys::RealtimeThread mmcss(L"Games", true);
     auto sock = net::UdpSocket::bind(0);
     if (!sock) {
         fail("No se pudo abrir un puerto UDP");
@@ -505,11 +507,7 @@ void ClientSession::media_thread() {
         net::Endpoint from;
         const auto n = sock->recv_from(buf, from, 20);
         if (!n) break;
-        if (*n == 0 || from.ip != host_media.ip) {
-            // Watchdog: llegan paquetes pero ningún frame se completa -> pedir IDR.
-            if (last_frame_us_ != 0 && now - last_frame_us_ > 300'000 && stream()) request_keyframe();
-            continue;
-        }
+        if (*n == 0 || from.ip != host_media.ip) continue;
         const auto header = media::PacketHeader::read({buf.data(), *n});
         if (!header || !rx.open({buf.data(), *n}, payload)) continue;
 
@@ -523,6 +521,17 @@ void ClientSession::media_thread() {
         if (header->type == media::PacketType::Video) {
             if (simulated_loss_ > 0 && std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) continue;
             handle_video(payload);
+            // Vigilante: siguen llegando paquetes de video pero hace >250 ms que ningún frame se completa
+            // (p. ej. se perdió el keyframe). Con la pantalla quieta el host casi no envía y eso es normal.
+            const std::uint64_t t = gpu::now_us();
+            if (last_frame_us_ != 0 && t - last_frame_us_ > 250'000) {
+                std::uint64_t since_idr = 0;
+                {
+                    std::scoped_lock lock(mutex_);
+                    since_idr = t - last_idr_request_us_;
+                }
+                if (since_idr > 250'000) request_keyframe();
+            }
         } else if (header->type == media::PacketType::Audio) {
             handle_audio(payload);
         }

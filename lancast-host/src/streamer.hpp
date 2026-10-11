@@ -5,6 +5,7 @@
 
 #include <atomic>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -13,6 +14,7 @@
 
 #include "lancast/core/protocol.hpp"
 #include "lancast/host/host_service.hpp"
+#include "lancast/core/media.hpp"
 #include "lancast/platform/media_sender.hpp"
 
 namespace lancast::host {
@@ -44,6 +46,13 @@ public:
 
 private:
     void run();
+    void sender_loop();
+
+    struct SendJob {
+        std::vector<std::uint8_t> data;
+        media::EncodedFrameInfo info;
+        int fec_percent = 0;
+    };
 
     net::MediaSender& sender_;
     Callbacks callbacks_;
@@ -60,6 +69,18 @@ private:
     std::optional<proto::StreamStarted> current_;
     std::string encoder_name_;
     StreamStats stats_;
+    std::uint64_t stats_window_us_ = 0;  // Ventana de 1 s para las estadísticas (protegida por mutex_).
+    std::uint64_t window_frames_ = 0;
+    std::uint64_t window_bytes_ = 0;
+    double window_latency_ms_ = 0;
+    double window_wait_ms_ = 0;
+    double window_encode_ms_ = 0;
+
+    // Tubería: el hilo de captura/codificación entrega frames y este hilo los paquetiza, cifra y envía.
+    std::thread send_thread_;
+    std::mutex send_mutex_;
+    std::condition_variable send_cv_;
+    std::deque<SendJob> send_queue_;
 };
 
 }  // namespace lancast::host

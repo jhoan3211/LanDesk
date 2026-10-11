@@ -60,9 +60,20 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 ## Rendimiento
 
 - Camino de video sin copias a CPU: captura DXGI Desktop Duplication → escalado y conversión a NV12 con el procesador de video D3D11 → codificador por hardware del driver (NVENC/AMF/QuickSync vía Media Foundation) → UDP con FEC Reed-Solomon → decodificador DXVA → swapchain *flip-model* con tearing.
-- Medido en loopback con una GPU integrada AMD (1080p60 HEVC): captura+codificación ~4 ms, red ~0,5 ms, decodificación ~0,4 ms, presentación ~0,6 ms.
+- **En paralelo**: la captura entrega cada frame al codificador y sigue con el siguiente; los frames codificados se recogen en otro hilo y un tercer hilo los paquetiza, cifra y envía (los paquetes de datos salen antes de calcular la paridad). Hilos con prioridad de tiempo real (MMCSS) y GPU con prioridad alta.
+- Medido en loopback con una GPU integrada AMD (720p a 165 fps, HEVC): 165 fps sostenidos, ~6,5 ms de extremo a extremo (captura+codificación ~6 ms, red ~0,3 ms).
 - FEC al 15 % recupera sin cortes un 1 % de pérdida aleatoria (prueba automatizada).
-- Cambio de resolución, FPS, códec o monitor en ~130 ms sin reconectar.
+- Cambio de resolución, FPS, códec o monitor en ~130 ms sin reconectar; bitrate, FEC y audio sin reiniciar el video.
+
+### Cómo conseguir la menor latencia
+
+1. Botón **Latencia mínima** (barra superior del stream): FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa.
+2. **Pantalla completa** en el cliente: las estadísticas deben decir *Presentación directa (sin DWM)*; en ventana, Windows suma un frame de composición.
+3. Monitores de **alta frecuencia** en ambos equipos (144–240 Hz): cada frame tarda menos en dibujarse y capturarse.
+4. Windows (ambos PC): *Configuración → Sistema → Pantalla → Gráficos* → **Programación de GPU acelerada por hardware** y **Optimizaciones para juegos en ventana** activadas; **Modo de juego** activado; plan de energía de alto rendimiento.
+5. Tarjeta de red (ambos PC, *Administrador de dispositivos → adaptador → Opciones avanzadas*): **Moderación de interrupciones: Deshabilitado**, **Ethernet de eficiencia energética (EEE): Deshabilitado**, **Green Ethernet: Deshabilitado**.
+6. Antivirus con inspección de red (Kaspersky, etc.): excluye `LanCast.exe` o desactiva la inspección para la red local.
+7. El ancho de banda no es un problema en 2.5 GbE: un bitrate alto no agrega latencia, solo calidad.
 
 ## Red recomendada
 

@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <deque>
 #include <format>
+#include <functional>
 #include <mutex>
 
 #include "lancast/core/log.hpp"
@@ -44,33 +45,21 @@ MfScope::~MfScope() { MFShutdown(); }
 
 namespace {
 
-// Recibe los eventos de un MFT asíncrono (BeginGetEvent) y los encola para poder esperarlos con timeout.
+// Recibe los eventos de un MFT asíncrono (BeginGetEvent) y los despacha en el hilo de Media Foundation.
+// Así la salida del codificador se recoge en cuanto está lista, en paralelo con la captura del siguiente frame.
 class EventPump final : public IMFAsyncCallback {
 public:
-    explicit EventPump(IMFMediaEventGenerator* gen) : generator_(gen) {}
+    using Handler = std::function<void(MediaEventType, HRESULT)>;
+
+    EventPump(IMFMediaEventGenerator* gen, Handler handler) : generator_(gen), handler_(std::move(handler)) {}
 
     HRESULT start() { return generator_->BeginGetEvent(this, nullptr); }
 
-    // Espera el próximo evento hasta `timeout_ms`. Devuelve el tipo o 0 si no llegó.
-    MediaEventType wait(DWORD timeout_ms, HRESULT& status) {
-        std::unique_lock lock(mutex_);
-        if (!cv_.wait_for(lock, std::chrono::milliseconds(timeout_ms), [&] { return !events_.empty() || dead_; })) {
-            return 0;
-        }
-        if (events_.empty()) {
-            status = MF_E_SHUTDOWN;
-            return MEError;
-        }
-        auto [type, st] = events_.front();
-        events_.pop_front();
-        status = st;
-        return type;
-    }
-
-    void stop() {
-        std::scoped_lock lock(mutex_);
+    // Desconecta el manejador; espera a que termine el que esté en curso.
+    void detach() {
+        std::scoped_lock lock(handler_mutex_);
+        handler_ = nullptr;
         dead_ = true;
-        cv_.notify_all();
     }
 
     // IUnknown
@@ -95,18 +84,17 @@ public:
     STDMETHODIMP Invoke(IMFAsyncResult* result) override {
         ComPtr<IMFMediaEvent> event;
         const HRESULT hr = generator_->EndGetEvent(result, &event);
-        std::scoped_lock lock(mutex_);
+        std::scoped_lock lock(handler_mutex_);
         if (FAILED(hr) || !event) {
             dead_ = true;
-            cv_.notify_all();
+            if (handler_) handler_(MEError, FAILED(hr) ? hr : E_FAIL);
             return S_OK;
         }
         MediaEventType type = 0;
         HRESULT status = S_OK;
         event->GetType(&type);
         event->GetStatus(&status);
-        events_.emplace_back(type, status);
-        cv_.notify_all();
+        if (handler_) handler_(type, status);
         if (!dead_) generator_->BeginGetEvent(this, nullptr);
         return S_OK;
     }
@@ -116,9 +104,8 @@ private:
 
     LONG refs_ = 1;
     ComPtr<IMFMediaEventGenerator> generator_;
-    std::mutex mutex_;
-    std::condition_variable cv_;
-    std::deque<std::pair<MediaEventType, HRESULT>> events_;
+    std::mutex handler_mutex_;
+    Handler handler_;
     bool dead_ = false;
 };
 
@@ -154,7 +141,7 @@ bool has_parameter_sets(std::span<const std::uint8_t> data, Codec codec) {
 class MfEncoder final : public Encoder {
 public:
     ~MfEncoder() override {
-        if (pump_) pump_->stop();
+        if (pump_) pump_->detach();
         if (transform_) {
             transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_OF_STREAM, 0);
             transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
@@ -171,14 +158,21 @@ public:
         return enc;
     }
 
-    platform::Result<std::optional<EncodedPacket>> encode(ID3D11Texture2D* nv12, std::uint64_t timestamp_us,
-                                                          bool force_keyframe) override {
-        // Esperar a que el MFT pida entrada.
-        while (need_input_ == 0) {
-            if (auto r = pump_events(1000, true); !r) return std::unexpected(r.error());
-            if (need_input_ == 0 && last_wait_timed_out_) {
-                return std::unexpected(platform::Error{"El codificador no responde", static_cast<std::int32_t>(MF_E_TRANSFORM_NEED_MORE_INPUT)});
+    void set_output_callback(OutputCallback callback) override {
+        std::scoped_lock lock(state_mutex_);
+        callback_ = std::move(callback);
+    }
+
+    platform::Result<void> submit(ID3D11Texture2D* nv12, std::uint64_t timestamp_us, bool force_keyframe) override {
+        {
+            // Esperar a que el MFT acepte otra entrada (contrapresión natural si la GPU va justa).
+            std::unique_lock lock(state_mutex_);
+            if (!state_cv_.wait_for(lock, std::chrono::seconds(1), [&] { return need_input_ > 0 || failed_; })) {
+                return std::unexpected(platform::Error{"El codificador no responde",
+                                                       static_cast<std::int32_t>(MF_E_TRANSFORM_NEED_MORE_INPUT)});
             }
+            if (failed_) return platform::detail::hr_error("Error del codificador", error_hr_);
+            --need_input_;
         }
 
         ComPtr<IMFMediaBuffer> buffer;
@@ -195,23 +189,20 @@ public:
         sample->SetSampleTime(static_cast<LONGLONG>(timestamp_us) * 10);
         sample->SetSampleDuration(10'000'000LL / std::max<std::uint32_t>(config_.fps, 1));
 
+        std::scoped_lock io(io_mutex_);
         if (force_keyframe && codec_api_) set_codec_value(codec_api_.Get(), CODECAPI_AVEncVideoForceKeyFrame, 1);
-
         hr = transform_->ProcessInput(input_id_, sample.Get(), 0);
         if (FAILED(hr)) return platform::detail::hr_error("ProcessInput", hr);
-        --need_input_;
+        return {};
+    }
 
-        // Esperar el bitstream (1 entrada -> 1 salida en modo de baja latencia). Si el MFT tiene retardo
-        // interno, la salida del frame anterior llega aquí y el primer frame simplemente agota la espera.
-        const std::uint64_t deadline = gpu::now_us() + 100'000;
-        while (output_.empty()) {
-            const std::uint64_t now = gpu::now_us();
-            if (now >= deadline) break;
-            if (auto r = pump_events(static_cast<DWORD>((deadline - now) / 1000 + 1), true); !r) {
-                return std::unexpected(r.error());
-            }
-            if (last_wait_timed_out_) break;
-        }
+    platform::Result<std::optional<EncodedPacket>> encode(ID3D11Texture2D* nv12, std::uint64_t timestamp_us,
+                                                          bool force_keyframe) override {
+        if (auto r = submit(nv12, timestamp_us, force_keyframe); !r) return std::unexpected(r.error());
+        // Modo síncrono (sin callback): esperar el bitstream (de este frame o de uno anterior si el MFT tiene retardo).
+        std::unique_lock lock(state_mutex_);
+        state_cv_.wait_for(lock, std::chrono::milliseconds(100), [&] { return !output_.empty() || failed_; });
+        if (failed_) return platform::detail::hr_error("Error del codificador", error_hr_);
         if (output_.empty()) return std::optional<EncodedPacket>{};
         EncodedPacket p = std::move(output_.front());
         output_.pop_front();
@@ -307,10 +298,10 @@ private:
             set_codec_value(codec_api_.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0);
             // GOP muy largo: los IDR se piden solo cuando hay pérdidas irrecuperables.
             set_codec_value(codec_api_.Get(), CODECAPI_AVEncMPVGOPSize, config_.fps * 30);
-            set_codec_value(codec_api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 33);
-            // VBV de ~1 frame: el tamaño de cada frame se mantiene estable (latencia de red mínima).
+            set_codec_value(codec_api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed, config_.low_latency ? 0 : 50);
+            // VBV de 1 frame (latencia mínima) o 2: el tamaño de cada frame se mantiene estable y la red no hace cola.
             set_codec_value(codec_api_.Get(), CODECAPI_AVEncCommonBufferSize,
-                            config_.bitrate_kbps * 1000 / std::max<std::uint32_t>(config_.fps, 1) * 2);
+                            config_.bitrate_kbps * 1000 / std::max<std::uint32_t>(config_.fps, 1) * (config_.low_latency ? 1 : 2));
         }
 
         // 5) Tipo de salida y luego de entrada.
@@ -372,7 +363,7 @@ private:
         // 6) Arrancar.
         ComPtr<IMFMediaEventGenerator> gen;
         if (FAILED(transform_.As(&gen))) return std::unexpected(platform::Error{"El MFT no genera eventos", 0});
-        pump_ = new EventPump(gen.Get());
+        pump_ = new EventPump(gen.Get(), [this](MediaEventType type, HRESULT status) { on_event(type, status); });
         pump_->start();
         transform_->ProcessMessage(MFT_MESSAGE_COMMAND_FLUSH, 0);
         transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
@@ -383,31 +374,49 @@ private:
         return {};
     }
 
-    // Procesa eventos; espera hasta timeout si `block` y no hay nada pendiente.
-    platform::Result<void> pump_events(DWORD timeout_ms, bool block) {
-        last_wait_timed_out_ = false;
-        HRESULT status = S_OK;
-        const MediaEventType type = pump_->wait(block ? timeout_ms : 0, status);
-        if (type == 0) {
-            last_wait_timed_out_ = true;
-            return {};
-        }
+    // Se ejecuta en un hilo de Media Foundation.
+    void on_event(MediaEventType type, HRESULT status) {
         switch (type) {
-            case METransformNeedInput:
+            case METransformNeedInput: {
+                std::scoped_lock lock(state_mutex_);
                 ++need_input_;
                 break;
-            case METransformHaveOutput:
-                if (auto r = collect_output(); !r) return r;
+            }
+            case METransformHaveOutput: {
+                std::optional<EncodedPacket> packet;
+                platform::Result<void> r;
+                {
+                    std::scoped_lock io(io_mutex_);
+                    r = collect_output(packet);
+                }
+                OutputCallback cb;
+                {
+                    std::scoped_lock lock(state_mutex_);
+                    if (!r) {
+                        failed_ = true;
+                        error_hr_ = r.error().hresult;
+                    } else if (packet && !callback_) {
+                        output_.push_back(std::move(*packet));
+                        packet.reset();
+                    }
+                    cb = callback_;
+                }
+                if (packet && cb) cb(std::move(*packet));
                 break;
-            case MEError:
-                return platform::detail::hr_error("Error del codificador", status);
+            }
+            case MEError: {
+                std::scoped_lock lock(state_mutex_);
+                failed_ = true;
+                error_hr_ = status;
+                break;
+            }
             default:
                 break;
         }
-        return {};
+        state_cv_.notify_all();
     }
 
-    platform::Result<void> collect_output() {
+    platform::Result<void> collect_output(std::optional<EncodedPacket>& result) {
         MFT_OUTPUT_DATA_BUFFER out{};
         out.dwStreamID = output_id_;
         ComPtr<IMFSample> own_sample;
@@ -455,7 +464,7 @@ private:
         }
         p.data.insert(p.data.end(), bytes.begin(), bytes.end());
         buffer->Unlock();
-        output_.push_back(std::move(p));
+        result = std::move(p);
         return {};
     }
 
@@ -471,8 +480,13 @@ private:
     bool async_ = false;
     bool provides_samples_ = true;
     DWORD output_buffer_size_ = 0;
+    std::mutex io_mutex_;     // Serializa ProcessInput / ProcessOutput.
+    std::mutex state_mutex_;  // need_input_, output_, failed_, callback_.
+    std::condition_variable state_cv_;
     int need_input_ = 0;
-    bool last_wait_timed_out_ = false;
+    bool failed_ = false;
+    HRESULT error_hr_ = S_OK;
+    OutputCallback callback_;
     std::deque<EncodedPacket> output_;
     std::vector<std::uint8_t> sequence_header_;
 };

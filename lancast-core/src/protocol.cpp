@@ -147,6 +147,7 @@ void StreamConfig::write(ByteWriter& w) const {
     w.u32(bitrate_kbps).u8(static_cast<std::uint8_t>(rate_control)).boolean(chroma_444).boolean(hdr).boolean(audio).u8(
         fec_percent);
     w.u32(audio_rate).u8(audio_channels);
+    w.boolean(low_latency);
 }
 
 std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
@@ -166,6 +167,7 @@ std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
     c.audio_rate = r.u32();
     c.audio_channels = r.u8();
     if (c.audio_channels < 1 || c.audio_channels > 2) c.audio_channels = 2;
+    if (r.ok() && r.remaining() >= 1) c.low_latency = r.boolean();  // Ausente en clientes 1.1.0.
     if (static_cast<int>(c.codec) > 3 || static_cast<int>(c.rate_control) > 1) return std::nullopt;
     return finish(r, std::move(c));
 }

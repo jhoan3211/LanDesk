@@ -166,6 +166,7 @@ struct StreamConfig {
     std::uint8_t fec_percent = 15;
     std::uint32_t audio_rate = 0;     // 0 = la del sistema del host.
     std::uint8_t audio_channels = 2;  // 1 = mono, 2 = estéreo.
+    bool low_latency = true;          // Opcional (1.2+): preset rápido del codificador.
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };

@@ -11,6 +11,7 @@
 #include <cmath>
 
 #include "lancast/core/log.hpp"
+#include "lancast/platform/system.hpp"
 #include "win.hpp"
 
 namespace lancast::audio {
@@ -54,6 +55,7 @@ Format LoopbackCapture::format() const {
 
 void LoopbackCapture::run() {
     platform::detail::ComScope com;
+    sys::RealtimeThread mmcss(L"Pro Audio");
     std::vector<std::int16_t> out;
 
     while (running_) {
@@ -178,6 +180,7 @@ double Player::buffered_ms() const {
 
 void Player::run() {
     platform::detail::ComScope com;
+    sys::RealtimeThread mmcss(L"Pro Audio", true);
     while (running_) {
         ComPtr<IMMDevice> device = default_render_device();
         ComPtr<IAudioClient> client;

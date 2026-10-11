@@ -41,6 +41,10 @@ platform::Result<Device> create_device(std::optional<std::uint64_t> adapter_luid
 
     ComPtr<ID3D10Multithread> mt;
     if (SUCCEEDED(dev.device.As(&mt))) mt->SetMultithreadProtected(TRUE);
+    // Prioridad de GPU alta: la conversión/codificación no espera detrás de un juego (requiere privilegios
+    // para valores > 0; si no se puede, se queda en la normal).
+    ComPtr<IDXGIDevice> dxgi;
+    if (SUCCEEDED(dev.device.As(&dxgi)) && FAILED(dxgi->SetGPUThreadPriority(7))) dxgi->SetGPUThreadPriority(0);
     return dev;
 }
 

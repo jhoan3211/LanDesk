@@ -389,6 +389,7 @@ proto::StreamConfig App::make_stream_config() const {
     c.fec_percent = static_cast<std::uint8_t>(s.fec_percent);
     c.audio_rate = s.audio_sample_rate;
     c.audio_channels = s.audio_stereo ? 2 : 1;
+    c.low_latency = s.low_latency;
     return c;
 }
 
@@ -456,6 +457,8 @@ void App::disconnect_client() {
         session_.reset();
     }
     renderer_.reset();
+    render_boost_.reset();
+    presentation_mode_.clear();
     show_menu_ = false;
     pin_modal_open_ = false;
     frame_presented_since_stream_ = false;
@@ -492,6 +495,7 @@ void App::send_mouse_position() {
     const Rect view = view_rect({stream->width, stream->height}, backbuffer_size_, settings_.client.stream.scaling);
     if (const auto n = window_to_normalized(*pending_mouse_, view)) {
         session_->send_message(proto::encode(proto::MsgType::MouseAbs, proto::MouseAbs{n->x, n->y}));
+        last_mouse_send_us_ = gpu::now_us();
     }
     pending_mouse_.reset();
 }
@@ -543,6 +547,7 @@ void App::process_client() {
             case client::State::Connected:
                 pin_modal_open_ = false;
                 renderer_ = std::make_unique<VideoRenderer>(device_);
+                render_boost_ = std::make_unique<sys::RealtimeThread>(L"Games");
                 if (keyboard_hook_ == nullptr) keyboard_hook_ = SetWindowsHookExW(WH_KEYBOARD_LL, keyboard_proc, GetModuleHandleW(nullptr), 0);
                 toast(std::format("Conectado a {} · Ctrl+Alt+Shift+M abre el menú", session_->host_name()));
                 break;
@@ -755,6 +760,8 @@ LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         case WM_MOUSEMOVE:
             if (forward_input && !relative_mouse_) {
                 pending_mouse_ = PointF{static_cast<float>(GET_X_LPARAM(lp)), static_cast<float>(GET_Y_LPARAM(lp))};
+                // Sin esperar al bucle de dibujo: se envía ya (como mucho 1000 veces por segundo).
+                if (gpu::now_us() - last_mouse_send_us_ >= 1000) send_mouse_position();
             }
             return 0;
         case WM_LBUTTONDOWN:
@@ -973,10 +980,42 @@ void App::render() {
     swapchain_->Present(vsync ? 1 : 0, flags);
     last_present_us_ = gpu::now_us();
 
+    if (streaming() && last_present_us_ - last_presentation_check_us_ > 1'000'000) update_presentation_mode();
     if (new_video) {
         frame_presented_since_stream_ = true;
         session_->report_presented(last_frame.frame.info, last_frame.arrival_us, decode_ms, (last_present_us_ - t0) / 1000.0);
     }
+}
+
+void App::update_presentation_mode() {
+    last_presentation_check_us_ = last_present_us_;
+    Microsoft::WRL::ComPtr<IDXGISwapChainMedia> media;
+    DXGI_FRAME_STATISTICS_MEDIA st{};
+    if (FAILED(swapchain_.As(&media)) || FAILED(media->GetFrameStatisticsMedia(&st))) return;
+    // NONE = "independent flip": el frame va directo a la pantalla sin pasar por la composición de DWM.
+    presentation_direct_ = st.CompositionMode != DXGI_FRAME_PRESENTATION_MODE_COMPOSED;
+    presentation_mode_ = presentation_direct_ ? "directa (sin DWM)" : "compuesta por DWM (+1 frame)";
+}
+
+void App::apply_min_latency() {
+    StreamSettings& s = settings_.client.stream;
+    s.vsync = false;
+    s.low_latency = true;
+    s.audio_buffer_ms = std::min<std::uint32_t>(s.audio_buffer_ms, 10);
+    // FPS = frecuencia del monitor del host: cada frame que Windows dibuja se envía sin esperar turno.
+    if (session_) {
+        if (const auto info = session_->host_info()) {
+            std::uint32_t hz = 0;
+            for (const auto& m : info->monitors) {
+                if (s.monitor_id == 0 || m.id == s.monitor_id) hz = std::max(hz, m.refresh_hz);
+            }
+            if (hz >= 30) s.fps = hz;
+        }
+    }
+    settings_.client.active_profile.clear();
+    apply_stream_settings();
+    if (!fullscreen_ && streaming()) toggle_fullscreen();  // Pantalla completa = presentación directa.
+    toast(std::format("Latencia mínima: {} fps, V-Sync apagado, codificador rápido, pantalla completa", s.fps));
 }
 
 void App::save_settings() {

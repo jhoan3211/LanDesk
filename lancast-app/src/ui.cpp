@@ -179,7 +179,7 @@ void App::draw_sidebar() {
     ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.6f);
     ImGui::TextColored(kAccent, "LanCast");
     ImGui::PopFont();
-    ImGui::TextColored(kMuted, "%s · v1.1.0", settings_.device_name.c_str());
+    ImGui::TextColored(kMuted, "%s · v1.2.0", settings_.device_name.c_str());
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
@@ -510,6 +510,14 @@ void App::draw_stream_settings(bool live) {
         row("V-Sync");
         if (ImGui::Checkbox("##vsync", &s.vsync)) save_settings();
         help("Desactivado = menor latencia (permite tearing).");
+
+        row("Codificador");
+        if (ImGui::Checkbox("Latencia mínima##ll", &s.low_latency)) changed = true;
+        help("Preset más rápido del codificador y búfer de 1 frame. Desactívalo para más calidad con poco bitrate.");
+        if (live) {
+            row("");
+            if (primary_button("Aplicar latencia mínima")) apply_min_latency();
+        }
 
         row("Audio");
         if (ImGui::Checkbox("Transmitir##audio", &s.audio)) changed = true;
@@ -1010,6 +1018,9 @@ void App::draw_stream_toolbar() {
     }
 
     ImGui::SameLine();
+    if (primary_button("Latencia mínima")) apply_min_latency();
+    ImGui::SetItemTooltip("FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa");
+    ImGui::SameLine();
     if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) {
         show_stats_ = !show_stats_;
         settings_.client.show_stats = show_stats_;
@@ -1128,6 +1139,10 @@ void App::draw_stats_overlay() {
     ImGui::Text("Red                   %s", fmt_ms(s.network_ms).c_str());
     ImGui::Text("Decodificación        %s", fmt_ms(s.decode_ms).c_str());
     ImGui::Text("Presentación          %s", fmt_ms(s.present_ms).c_str());
+    if (!presentation_mode_.empty()) {
+        ImGui::TextColored(presentation_direct_ ? kGood : kWarn, "Presentación %s", presentation_mode_.c_str());
+        if (!presentation_direct_) ImGui::TextColored(kMuted, "  Pantalla completa (Ctrl+Alt+Shift+F) quita ese frame extra");
+    }
     const ImVec4 total_color = s.total_ms < 10 ? kGood : s.total_ms < 25 ? kWarn : kBad;
     ImGui::TextColored(total_color, "Total extremo a extremo %s", fmt_ms(s.total_ms).c_str());
     ImGui::Separator();

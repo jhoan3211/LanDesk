@@ -24,6 +24,8 @@ struct StreamStats {
     double fps = 0;
     double bitrate_mbps = 0;
     double capture_to_encoded_ms = 0;  // Captura + conversión + codificación.
+    double capture_wait_ms = 0;        // Windows presentó el frame -> empieza la conversión.
+    double encode_ms = 0;              // Conversión NV12 + codificador por hardware.
     std::uint64_t frames = 0;
     std::uint64_t keyframes = 0;
 };

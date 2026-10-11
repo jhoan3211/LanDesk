@@ -14,6 +14,7 @@
 #include "lancast/platform/capture.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/platform.hpp"
+#include "lancast/platform/system.hpp"
 #include "lancast/platform/video_processor.hpp"
 
 namespace lancast::host {
@@ -22,14 +23,32 @@ namespace {
 // Preferencia en modo automático: mejor compresión primero (menos bits = menos paquetes = menos latencia).
 constexpr std::array kAutoOrder{Codec::Hevc, Codec::Av1, Codec::H264};
 
+// Frame entregado al codificador y aún sin bitstream (se empareja por marca de tiempo).
+struct InFlight {
+    std::uint64_t ts = 0;
+    std::uint64_t capture_us = 0;
+    std::uint64_t encode_start_us = 0;
+};
+
+// Estado compartido con el hilo de Media Foundation que recoge los frames codificados.
+struct EncodeContext {
+    std::mutex mutex;
+    std::deque<InFlight> in_flight;
+    std::uint16_t epoch = 0;
+    std::atomic<int> fec{15};
+    std::uint32_t next_frame_id = 0;
+};
+
 struct Pipeline {
     std::uint64_t luid = 0;
     gpu::Device device;
     std::unique_ptr<capture::DesktopCapture> capture;
     std::unique_ptr<gpu::VideoProcessor> vp;
-    std::array<gpu::ComPtr<ID3D11Texture2D>, 3> nv12;
+    // Varias texturas: mientras el codificador lee una, la captura escribe la siguiente (en paralelo).
+    std::array<gpu::ComPtr<ID3D11Texture2D>, 5> nv12;
     std::size_t nv12_index = 0;
-    std::unique_ptr<mf::Encoder> encoder;
+    std::shared_ptr<EncodeContext> ctx;
+    std::unique_ptr<mf::Encoder> encoder;  // Declarado después de ctx: se destruye antes.
     proto::StreamStarted info;
     proto::StreamConfig config;
     Size stream_size;
@@ -45,6 +64,7 @@ public:
 
 Streamer::Streamer(net::MediaSender& sender, Callbacks callbacks) : sender_(sender), callbacks_(std::move(callbacks)) {
     thread_ = std::thread([this] { run(); });
+    send_thread_ = std::thread([this] { sender_loop(); });
 }
 
 Streamer::~Streamer() { stop(); }
@@ -52,7 +72,9 @@ Streamer::~Streamer() { stop(); }
 void Streamer::stop() {
     running_ = false;
     cv_.notify_all();
+    send_cv_.notify_all();
     if (thread_.joinable()) thread_.join();
+    if (send_thread_.joinable()) send_thread_.join();
 }
 
 void Streamer::configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
@@ -89,20 +111,19 @@ std::optional<proto::StreamStarted> Streamer::current() const {
 void Streamer::run() {
     CoInit com;
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    sys::RealtimeThread mmcss(L"Capture");
     // Prioridad de GPU alta para el contexto de captura/codificación.
     std::unique_ptr<Pipeline> p;
     std::uint16_t epoch = 0;
-    std::uint32_t frame_id = 0;
-    auto cipher = sender_.make_cipher();
-    std::vector<std::uint8_t> scratch;
+    std::uint64_t last_ts = 0;
 
     bool dirty = false;
     std::uint64_t dirty_since_us = 0;
     std::uint64_t last_encode_us = 0;
-    std::uint64_t stats_window_us = gpu::now_us();
-    std::uint64_t window_frames = 0;
-    std::uint64_t window_bytes = 0;
-    double window_latency_ms = 0;
+    {
+        std::scoped_lock lock(mutex_);
+        stats_window_us_ = gpu::now_us();
+    }
     capture::PointerState last_pointer{};
     std::uint64_t last_pointer_send_us = 0;
 
@@ -208,7 +229,7 @@ void Streamer::run() {
             bitrate_kbps = cfg.auto_bitrate ? auto_bitrate_mbps(stream_size.width, stream_size.height, fps, c) * 1000
                                             : std::clamp<std::uint32_t>(cfg.bitrate_kbps, kMinBitrateMbps * 1000,
                                                                         kMaxBitrateMbps * 1000);
-            auto enc = mf::create_encoder(next->device, {c, stream_size, fps, bitrate_kbps, cfg.rate_control});
+            auto enc = mf::create_encoder(next->device, {c, stream_size, fps, bitrate_kbps, cfg.rate_control, cfg.low_latency});
             if (enc) {
                 next->encoder = std::move(*enc);
                 codec = c;
@@ -219,7 +240,58 @@ void Streamer::run() {
         if (!next->encoder) return fail("No se pudo iniciar ningún codificador por hardware");
 
         ++epoch;
-        frame_id = 0;
+        next->ctx = std::make_shared<EncodeContext>();
+        next->ctx->epoch = epoch;
+        next->ctx->fec = static_cast<int>(cfg.fec_percent);
+        // Salida en paralelo: cada frame codificado va directo al hilo de envío.
+        next->encoder->set_output_callback([this, ctx = next->ctx](mf::EncodedPacket&& pkt) {
+            const std::uint64_t encoded_us = gpu::now_us();
+            InFlight f{pkt.timestamp_us, pkt.timestamp_us, encoded_us};
+            media::EncodedFrameInfo info;
+            {
+                std::scoped_lock lock(ctx->mutex);
+                while (!ctx->in_flight.empty() && ctx->in_flight.front().ts < pkt.timestamp_us) ctx->in_flight.pop_front();
+                if (!ctx->in_flight.empty() && ctx->in_flight.front().ts == pkt.timestamp_us) {
+                    f = ctx->in_flight.front();
+                    ctx->in_flight.pop_front();
+                }
+                info.frame_id = ++ctx->next_frame_id;
+                info.epoch = ctx->epoch;
+            }
+            info.keyframe = pkt.keyframe;
+            info.capture_time_us = f.capture_us;
+            info.encode_time_us = static_cast<std::uint32_t>(encoded_us - std::min(f.capture_us, encoded_us));
+            const std::size_t bytes = pkt.data.size();
+            {
+                std::scoped_lock lock(send_mutex_);
+                send_queue_.push_back(SendJob{std::move(pkt.data), info, ctx->fec.load()});
+            }
+            send_cv_.notify_one();
+
+            std::scoped_lock lock(mutex_);
+            ++stats_.frames;
+            if (info.keyframe) ++stats_.keyframes;
+            ++window_frames_;
+            window_bytes_ += bytes;
+            window_latency_ms_ += info.encode_time_us / 1000.0;
+            window_wait_ms_ += static_cast<double>(f.encode_start_us - std::min(f.capture_us, f.encode_start_us)) / 1000.0;
+            window_encode_ms_ += static_cast<double>(encoded_us - std::min(f.encode_start_us, encoded_us)) / 1000.0;
+            if (encoded_us - stats_window_us_ >= 1'000'000) {
+                const double secs = static_cast<double>(encoded_us - stats_window_us_) / 1e6;
+                const double n = static_cast<double>(window_frames_);
+                stats_.fps = n / secs;
+                stats_.bitrate_mbps = static_cast<double>(window_bytes_) * 8.0 / secs / 1e6;
+                stats_.capture_to_encoded_ms = n > 0 ? window_latency_ms_ / n : 0;
+                stats_.capture_wait_ms = n > 0 ? window_wait_ms_ / n : 0;
+                stats_.encode_ms = n > 0 ? window_encode_ms_ / n : 0;
+                stats_window_us_ = encoded_us;
+                window_frames_ = 0;
+                window_bytes_ = 0;
+                window_latency_ms_ = 0;
+                window_wait_ms_ = 0;
+                window_encode_ms_ = 0;
+            }
+        });
         next->config = cfg;
         next->stream_size = stream_size;
         next->info.epoch = epoch;
@@ -270,12 +342,13 @@ void Streamer::run() {
             if (p && p->config.monitor_id == cfg->monitor_id && p->config.max_width == cfg->max_width &&
                 p->config.max_height == cfg->max_height && p->config.fps == cfg->fps && p->config.codec == cfg->codec &&
                 p->config.rate_control == cfg->rate_control && p->config.chroma_444 == cfg->chroma_444 &&
-                p->config.hdr == cfg->hdr) {
+                p->config.hdr == cfg->hdr && p->config.low_latency == cfg->low_latency) {
                 const std::uint32_t kbps = cfg->auto_bitrate
                                                ? auto_bitrate_mbps(p->stream_size.width, p->stream_size.height,
                                                                    p->info.fps, p->info.codec) * 1000
                                                : cfg->bitrate_kbps;
                 p->encoder->set_bitrate(kbps);
+                p->ctx->fec = static_cast<int>(cfg->fec_percent);
                 p->config = *cfg;
                 p->info.bitrate_kbps = kbps;
                 p->info.audio_rate = cfg->audio ? audio_rate : 0;
@@ -346,51 +419,47 @@ void Streamer::run() {
         // (Los frames de mantenimiento o IDR sobre una imagen vieja cuentan desde ahora.)
         const std::uint64_t base = dirty ? dirty_since_us : now;
         const std::uint64_t capture_us = (presented != 0 && presented <= now && presented + 50'000 >= base) ? presented : base;
+        const std::uint64_t encode_start_us = gpu::now_us();
         ID3D11Texture2D* target = p->nv12[p->nv12_index].Get();
         p->nv12_index = (p->nv12_index + 1) % p->nv12.size();
         if (!p->vp->process(p->capture->texture(), 0, target, nullptr, nullptr, p->capture->rotation())) {
             fail("Falló la conversión de color en la GPU");
             continue;
         }
-        auto packet = p->encoder->encode(target, now, idr);
+        // Entregar al codificador y volver a capturar: el bitstream llega por el callback (en paralelo).
+        const std::uint64_t ts = std::max(now, last_ts + 1);
+        last_ts = ts;
+        {
+            std::scoped_lock lock(p->ctx->mutex);
+            p->ctx->in_flight.push_back(InFlight{ts, capture_us, encode_start_us});
+            if (p->ctx->in_flight.size() > 16) p->ctx->in_flight.pop_front();
+        }
+        auto submitted = p->encoder->submit(target, ts, idr);
         last_encode_us = now;
         dirty = false;
-        if (!packet) {
-            fail(packet.error().message());
-            continue;
-        }
-        if (!packet->has_value()) continue;
-        const mf::EncodedPacket& pkt = **packet;
-        const std::uint64_t encoded_us = gpu::now_us();
-
-        media::EncodedFrameInfo info;
-        info.frame_id = ++frame_id;
-        info.keyframe = pkt.keyframe;
-        info.capture_time_us = capture_us;
-        info.encode_time_us = static_cast<std::uint32_t>(encoded_us - capture_us);
-        info.epoch = p->info.epoch;
-        media::packetize_frame(pkt.data, info, p->config.fec_percent, [&](std::span<const std::uint8_t> payload) {
-            sender_.send(*cipher, media::PacketType::Video, payload, scratch);
-        });
-
-        ++window_frames;
-        window_bytes += pkt.data.size();
-        window_latency_ms += info.encode_time_us / 1000.0;
-        std::scoped_lock lock(mutex_);
-        ++stats_.frames;
-        if (pkt.keyframe) ++stats_.keyframes;
-        if (encoded_us - stats_window_us >= 1'000'000) {
-            const double secs = (encoded_us - stats_window_us) / 1e6;
-            stats_.fps = window_frames / secs;
-            stats_.bitrate_mbps = window_bytes * 8.0 / secs / 1e6;
-            stats_.capture_to_encoded_ms = window_frames ? window_latency_ms / window_frames : 0;
-            stats_window_us = encoded_us;
-            window_frames = 0;
-            window_bytes = 0;
-            window_latency_ms = 0;
-        }
+        if (!submitted) fail(submitted.error().message());
     }
     p.reset();
+}
+
+void Streamer::sender_loop() {
+    SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
+    sys::RealtimeThread mmcss(L"Games");
+    auto cipher = sender_.make_cipher();
+    std::vector<std::uint8_t> scratch;
+    while (running_) {
+        SendJob job;
+        {
+            std::unique_lock lock(send_mutex_);
+            send_cv_.wait(lock, [&] { return !send_queue_.empty() || !running_; });
+            if (!running_) return;
+            job = std::move(send_queue_.front());
+            send_queue_.pop_front();
+        }
+        media::packetize_frame(job.data, job.info, job.fec_percent, [&](std::span<const std::uint8_t> payload) {
+            sender_.send(*cipher, media::PacketType::Video, payload, scratch);
+        });
+    }
 }
 
 }  // namespace lancast::host

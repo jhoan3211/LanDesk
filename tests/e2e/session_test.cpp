@@ -1,4 +1,4 @@
-// Prueba de extremo a extremo: host y cliente reales sobre loopback (captura, codificación, FEC, cifrado,
+﻿// Prueba de extremo a extremo: host y cliente reales sobre loopback (captura, codificación, FEC, cifrado,
 // decodificación, emparejamiento con PIN, reconexión emparejada, archivos y rechazo de PIN incorrecto).
 
 #include <gtest/gtest.h>
@@ -54,7 +54,7 @@ proto::StreamConfig make_config() {
     c.monitor_id = 0;  // Todos los monitores.
     c.max_width = 1280;
     c.max_height = 720;
-    c.fps = 60;
+    c.fps = 165;  // = Hz del monitor de pruebas: sin espera de turno
     c.codec = CodecChoice::Auto;
     c.audio = true;
     c.fec_percent = 15;
@@ -139,6 +139,9 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     std::printf("  Frames recibidos: %d, decodificados: %d\n", frames, decoded);
     EXPECT_TRUE(got_key);
     EXPECT_GE(decoded, 1);  // Con el escritorio quieto el host solo manda frames de mantenimiento.
+    const auto hs = host.status().stats;
+    std::printf("  Host: espera de captura %.2f ms, conversión+codificación %.2f ms, %.0f fps\n", hs.capture_wait_ms,
+                hs.encode_ms, hs.fps);
     const auto stats = client.stats();
     std::printf("  Latencia: codificación %.2f ms, red %.2f ms, total %.2f ms, RTT %.2f ms\n", stats.encode_ms,
                 stats.network_ms, stats.total_ms, stats.rtt_ms);

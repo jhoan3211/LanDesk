@@ -34,6 +34,19 @@ struct PairedDevice {
 void save_paired(const std::vector<PairedDevice>& devices);
 
 [[nodiscard]] bool is_elevated();
+
+// Registra el hilo actual en MMCSS (planificador multimedia de Windows) mientras viva el objeto:
+// menos interrupciones y latencia de planificación más estable. task: "Games", "Capture", "Pro Audio"...
+class RealtimeThread {
+public:
+    explicit RealtimeThread(const wchar_t* task, bool critical = false);
+    ~RealtimeThread();
+    RealtimeThread(const RealtimeThread&) = delete;
+    RealtimeThread& operator=(const RealtimeThread&) = delete;
+
+private:
+    void* handle_ = nullptr;
+};
 // Crea reglas de entrada del firewall (perfil Privado) para LanCast.exe, pidiendo elevación (UAC).
 bool add_firewall_rules();
 bool set_autostart(bool enabled);

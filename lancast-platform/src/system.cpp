@@ -5,6 +5,7 @@
 #include <shlobj.h>
 #include <shellapi.h>
 #include <shobjidl.h>
+#include <avrt.h>
 
 #include <fstream>
 #include <sstream>
@@ -17,6 +18,7 @@
 
 #pragma comment(lib, "shell32.lib")
 #pragma comment(lib, "advapi32.lib")
+#pragma comment(lib, "avrt.lib")
 
 namespace lancast::sys {
 namespace {
@@ -131,6 +133,16 @@ bool is_elevated() {
     const bool ok = GetTokenInformation(token, TokenElevation, &elevation, sizeof(elevation), &size) && elevation.TokenIsElevated;
     CloseHandle(token);
     return ok;
+}
+
+RealtimeThread::RealtimeThread(const wchar_t* task, bool critical) {
+    DWORD index = 0;
+    handle_ = AvSetMmThreadCharacteristicsW(task, &index);
+    if (handle_ != nullptr) AvSetMmThreadPriority(handle_, critical ? AVRT_PRIORITY_CRITICAL : AVRT_PRIORITY_HIGH);
+}
+
+RealtimeThread::~RealtimeThread() {
+    if (handle_ != nullptr) AvRevertMmThreadCharacteristics(handle_);
 }
 
 bool add_firewall_rules() {

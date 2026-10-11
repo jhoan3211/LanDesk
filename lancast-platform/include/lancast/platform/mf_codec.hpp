@@ -5,6 +5,7 @@
 // - Decodificador: el MFT de decodificación de Windows con DXVA (D3D11), salida en textura NV12 de la GPU.
 // Así LanCast es un único .exe sin DLL de terceros.
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -32,6 +33,7 @@ struct EncoderConfig {
     std::uint32_t fps = 60;
     std::uint32_t bitrate_kbps = 20000;
     RateControl rate_control = RateControl::Cbr;
+    bool low_latency = true;  // Preset más rápido y VBV de 1 frame.
 };
 
 struct EncodedPacket {
@@ -42,7 +44,15 @@ struct EncodedPacket {
 
 class Encoder {
 public:
+    using OutputCallback = std::function<void(EncodedPacket&&)>;
+
     virtual ~Encoder() = default;
+    // Modo en paralelo: cada frame codificado se entrega a este callback (desde un hilo de Media Foundation)
+    // en cuanto está listo, mientras el llamador ya envía el siguiente frame con submit().
+    virtual void set_output_callback(OutputCallback callback) = 0;
+    // Entrega un frame y vuelve en cuanto el codificador lo acepta. `nv12` debe seguir válido hasta que
+    // el codificador lo consuma (usar un pool de varias texturas).
+    virtual platform::Result<void> submit(ID3D11Texture2D* nv12, std::uint64_t timestamp_us, bool force_keyframe) = 0;
     // `nv12` debe seguir válido hasta la siguiente llamada (usar un pool de texturas).
     virtual platform::Result<std::optional<EncodedPacket>> encode(ID3D11Texture2D* nv12, std::uint64_t timestamp_us,
                                                                   bool force_keyframe) = 0;
