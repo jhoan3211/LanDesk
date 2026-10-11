@@ -565,6 +565,19 @@ struct HostService::Impl {
     }
 
     // Segunda ventana del cliente: otro monitor del host en paralelo (sin audio, mismo canal UDP).
+    // ¿El monitor pedido (0 = todos) se solapa con lo que ya captura el stream principal?
+    static bool overlaps_monitor(const Rect& main_src, std::uint32_t monitor_id) {
+        if (monitor_id == 0) return true;
+        const auto gpus = platform::enumerate_gpus();
+        if (!gpus) return false;
+        const auto monitors = platform::enumerate_monitors(*gpus);
+        if (!monitors) return false;
+        const auto it = std::ranges::find(*monitors, monitor_id, &MonitorInfo::id);
+        if (it == monitors->end()) return false;
+        const Rect& m = it->desktop;
+        return m.x < main_src.right() && main_src.x < m.right() && m.y < main_src.bottom() && main_src.y < m.bottom();
+    }
+
     void configure_second(Session& s, proto::StreamConfig c) {
         if (!c.enabled) {
             if (s.second) {
@@ -576,6 +589,12 @@ struct HostService::Impl {
         }
         c.audio = false;
         c.fec_percent = std::min<std::uint8_t>(c.fec_percent, 50);
+        // Windows no deja duplicar dos veces la misma pantalla en un proceso: avisar con claridad.
+        if (const auto main_src = s.streamer->source(); main_src && overlaps_monitor(*main_src, c.monitor_id)) {
+            s.channel->send(proto::encode(proto::MsgType::StreamStopped,
+                                          proto::StreamStoppedMsg{1, "Ese monitor ya se ve en la ventana principal; elige otro"}));
+            return;
+        }
         if (!s.second) {
             Streamer::Callbacks cb;
             cb.started = [&s](const proto::StreamStarted& info) {

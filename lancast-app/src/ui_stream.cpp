@@ -393,11 +393,11 @@ void App::draw_second_window_controls() {
     }
     const auto info = session_->host_info();
     const auto stream = session_->stream();
-    if (!info || info->monitors.size() < 2) return;
+    if (!info || info->monitors.size() < 2 || (stream && stream->monitor_id == 0)) return;
     ImGui::SetNextItemWidth(190 * scale_);
     if (ImGui::BeginCombo("##second", "Abrir otro monitor…")) {
         for (const auto& m : info->monitors) {
-            if (stream && (stream->monitor_id == m.id || stream->monitor_id == 0)) continue;
+            if (stream && stream->monitor_id == m.id) continue;
             if (ImGui::Selectable(std::format("{}: {} ({}x{})", m.id, m.name, m.rect.width, m.rect.height).c_str())) {
                 open_second_window(m.id);
             }

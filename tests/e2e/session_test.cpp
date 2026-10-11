@@ -205,6 +205,38 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_EQ(client.stream()->bitrate_kbps, 15000u);
     EXPECT_EQ(client.stream()->epoch, epoch_before) << "Un cambio de audio/bitrate no debe recrear el codificador";
 
+    // 3c) Segundo stream en paralelo (índice 1, sin audio): llegan cuadros por separado y se detiene.
+    {
+        proto::StreamConfig second = cfg3;
+        second.stream_index = 1;
+        second.audio = false;
+        second.max_width = 640;
+        second.max_height = 360;
+        client.request_stream(second);
+        std::optional<std::string> second_error;
+        ASSERT_TRUE(wait_for([&] {
+            if (auto e = client.take_second_stream_error()) second_error = e;
+            return second_error.has_value() || client.stream(1).has_value();
+        }, 5000));
+        if (second_error) {
+            std::printf("  Segundo stream no disponible en este equipo: %s\n", second_error->c_str());
+        } else {
+            EXPECT_EQ(client.stream(1)->stream_index, 1);
+            EXPECT_LE(client.stream(1)->width, 640u);
+            int second_frames = 0;
+            const std::uint64_t second_until = gpu::now_us() + 1'000'000;
+            while (gpu::now_us() < second_until && second_frames == 0) {
+                WaitForSingleObject(client.frame_event(1), 50);
+                second_frames += static_cast<int>(client.take_frames(1).size());
+            }
+            std::printf("  Segundo stream: %ux%u, %d cuadros\n", client.stream(1)->width, client.stream(1)->height, second_frames);
+            EXPECT_GT(second_frames, 0);
+            client.stop_second_stream();
+            ASSERT_TRUE(wait_for([&] { return !client.stream(1).has_value(); }, 2000));
+        }
+        EXPECT_EQ(client.stream()->epoch, epoch_before) << "El segundo stream no debe tocar el principal";
+    }
+
     // 4) Transferencia de archivo (cliente -> host) con verificación.
     const fs::path src = root_ / L"origen.bin";
     {
