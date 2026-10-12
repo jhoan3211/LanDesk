@@ -12,6 +12,7 @@
 #include "lancast/core/json_reader.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/platform/crypto.hpp"
+#include "lancast/platform/signature.hpp"
 #include "lancast/platform/system.hpp"
 
 #pragma comment(lib, "winhttp.lib")
@@ -156,9 +157,24 @@ platform::Result<fs::path> download(const ReleaseInfo& release,
         return std::unexpected(platform::Error{"El archivo descargado no es un ejecutable", 0});
     }
     const fs::path out = fs::temp_directory_path() / std::format(L"LanCast-{}.exe", platform::detail::to_wide(release.tag));
-    std::ofstream f(out, std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
-    if (!f) return std::unexpected(platform::Error{"No se pudo guardar la descarga", 0});
+    {
+        std::ofstream f(out, std::ios::binary | std::ios::trunc);
+        f.write(reinterpret_cast<const char*>(data->data()), static_cast<std::streamsize>(data->size()));
+        if (!f) return std::unexpected(platform::Error{"No se pudo guardar la descarga", 0});
+    }
+    // Si esta copia está firmada, la nueva debe tener una firma válida del mismo editor (además del SHA-256).
+    if (const sig::Info self = sig::verify(sys::exe_path()); self.valid) {
+        const sig::Info next = sig::verify(out);
+        if (!next.valid || next.subject != self.subject) {
+            std::error_code ec;
+            fs::remove(out, ec);
+            return std::unexpected(platform::Error{
+                std::format("La versión nueva no está firmada por {} ({}): no se instala",
+                            self.subject, next.valid ? "firmada por " + next.subject : next.error),
+                0});
+        }
+        log::info("Firma de la actualización verificada: {}", next.subject);
+    }
     log::info("Actualización {} descargada y verificada ({} bytes)", release.tag, data->size());
     return out;
 }

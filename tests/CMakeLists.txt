@@ -30,6 +30,7 @@ gtest_discover_tests(lancast-core-tests)
 add_executable(lancast-platform-tests
     platform/enumeration_test.cpp
     platform/pipeline_test.cpp
+    platform/system_test.cpp
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
 target_link_libraries(lancast-platform-tests PRIVATE lancast::platform GTest::gtest_main d3d11 dxgi)
 lancast_set_warnings(lancast-platform-tests)

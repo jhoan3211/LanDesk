@@ -1,0 +1,135 @@
+name: Release
+
+# Publica una versión: compila, prueba, firma (si hay certificado configurado), calcula el SHA-256 y crea el
+# release de GitHub con LanCast.exe, LanCast.pdb y las notas de CHANGELOG.md.
+#
+# Se dispara al subir un tag "v1.4.0" o a mano desde Actions → Release → Run workflow (crea el tag).
+# Firma (opcional, ver docs/firma-de-codigo.md):
+#   - Azure Artifact Signing: secretos AZURE_TENANT_ID, AZURE_CLIENT_ID, AZURE_CLIENT_SECRET y variables
+#     ARTIFACT_SIGNING_ENDPOINT, ARTIFACT_SIGNING_ACCOUNT, ARTIFACT_SIGNING_PROFILE.
+#   - Certificado .pfx: secretos SIGNING_PFX_BASE64 y SIGNING_PFX_PASSWORD.
+
+on:
+  push:
+    tags: ['v*.*.*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Versión a publicar (igual a VERSION en CMakeLists.txt), p. ej. 1.4.0'
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Compilar, firmar y publicar
+    runs-on: windows-2022
+    timeout-minutes: 60
+    env:
+      EXE: build/lancast-app/Release/LanCast.exe
+      PDB: build/lancast-app/Release/LanCast.pdb
+      HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
+      HAS_PFX_SIGNING: ${{ secrets.SIGNING_PFX_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Versión
+        id: version
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event_name }}' -eq 'workflow_dispatch') { '${{ inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "Versión no válida: '$v' (usa 1.4.0)" }
+          $cmake = (Select-String -Path CMakeLists.txt -Pattern '^\s+VERSION (\d+\.\d+\.\d+)' | Select-Object -First 1).Matches[0].Groups[1].Value
+          if ($cmake -ne $v) { throw "La versión $v no coincide con CMakeLists.txt ($cmake). Sube primero el cambio de versión." }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Notas de la versión (CHANGELOG.md)
+        shell: pwsh
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          $lines = Get-Content CHANGELOG.md -Encoding utf8
+          $start = ($lines | Select-String -Pattern "^## \[?$([regex]::Escape($v))\]?" | Select-Object -First 1).LineNumber
+          if (-not $start) { throw "CHANGELOG.md no tiene una sección '## $v'" }
+          $notes = @()
+          foreach ($l in $lines[$start..($lines.Count - 1)]) { if ($l -match '^## ') { break }; $notes += $l }
+          ($notes -join "`n").Trim() | Set-Content notes.md -Encoding utf8
+
+      - name: Configurar
+        run: cmake --preset vs2022
+
+      - name: Compilar
+        run: cmake --build --preset release -- /m /v:minimal
+
+      - name: Pruebas (sin hardware)
+        run: ctest --preset release -LE hardware
+
+      - name: Firmar con Azure Artifact Signing
+        if: env.HAS_AZURE_SIGNING == 'true'
+        # v2.0.0 fijado por commit.
+        uses: azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82
+        with:
+          azure-tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          azure-client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          azure-client-secret: ${{ secrets.AZURE_CLIENT_SECRET }}
+          endpoint: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          signing-account-name: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+          files: ${{ github.workspace }}\build\lancast-app\Release\LanCast.exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+          description: LanCast
+          description-url: https://github.com/${{ github.repository }}
+
+      - name: Firmar con certificado .pfx
+        if: env.HAS_AZURE_SIGNING != 'true' && env.HAS_PFX_SIGNING == 'true'
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.SIGNING_PFX_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP 'firma.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          try {
+            $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' | Sort-Object FullName | Select-Object -Last 1
+            & $signtool.FullName sign /f $pfx /p $env:PFX_PASSWORD /fd SHA256 /tr http://timestamp.digicert.com /td SHA256 /d LanCast $env:EXE
+            if ($LASTEXITCODE -ne 0) { throw "signtool falló ($LASTEXITCODE)" }
+          } finally {
+            Remove-Item $pfx -Force
+          }
+
+      - name: Verificar firma
+        shell: pwsh
+        run: |
+          $sig = Get-AuthenticodeSignature $env:EXE
+          if ($env:HAS_AZURE_SIGNING -eq 'true' -or $env:HAS_PFX_SIGNING -eq 'true') {
+            if ($sig.Status -ne 'Valid') { throw "La firma no es válida: $($sig.Status) $($sig.StatusMessage)" }
+            "Firmado por: $($sig.SignerCertificate.Subject)" | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          } else {
+            "::warning::LanCast.exe se publica SIN firma digital (Windows mostrará el aviso de SmartScreen). Ver docs/firma-de-codigo.md."
+            "Publicado sin firma digital." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
+          }
+
+      - name: SHA-256
+        id: hash
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash $env:EXE -Algorithm SHA256).Hash.ToLower()
+          "sha256=$hash" >> $env:GITHUB_OUTPUT
+          # La actualización automática exige esta línea en las notas.
+          "`n`nSHA-256: $hash" | Add-Content notes.md -Encoding utf8
+          "SHA-256: $hash" >> $env:GITHUB_STEP_SUMMARY
+
+      - name: Publicar el release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $v = '${{ steps.version.outputs.version }}'
+          gh release create "v$v" $env:EXE $env:PDB --title "LanCast $v" --notes-file notes.md --target $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el release v$v (¿ya existe?)" }

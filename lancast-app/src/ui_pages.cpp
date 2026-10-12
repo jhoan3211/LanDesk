@@ -15,6 +15,7 @@
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
 #include "lancast/platform/crash.hpp"
+#include "lancast/platform/signature.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/platform.hpp"
 #include "lancast/platform/system.hpp"
@@ -740,6 +741,15 @@ void App::draw_diagnostics_page() {
     if (ImGui::Button("Copiar al portapapeles") && report_) {
         ImGui::SetClipboardText(format_report_text(*report_, true).c_str());
         toast("Copiado");
+    }
+
+    // Firma digital de este ejecutable.
+    static const sig::Info self_sig = sig::verify(sys::exe_path());
+    if (self_sig.valid) {
+        ImGui::TextColored(kGood, "Firma digital válida: %s", self_sig.subject.c_str());
+    } else {
+        ImGui::TextColored(kMuted, "Ejecutable %s%s", self_sig.error.c_str(),
+                           self_sig.subject.empty() ? "" : (" (" + self_sig.subject + ")").c_str());
     }
 
     // Cierres inesperados: volcados de memoria guardados por esta app.
