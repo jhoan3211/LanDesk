@@ -10,11 +10,13 @@
 
 namespace lancast::adapt {
 
-// Una ventana de estadísticas (1 s) está sobrecargada si el codificador tarda más que el intervalo entre
-// cuadros o si se saltan más del 10 % de los cuadros. Con pocos cuadros (pantalla quieta) no se juzga.
+// Una ventana de estadísticas (1 s) está sobrecargada si el codificador realmente no da abasto: se saltan más del
+// 10 % de los cuadros, o los cuadros se acumulan (la latencia pasa de 2,5 intervalos). Que un cuadro tarde más que
+// el intervalo NO es sobrecarga: el codificador trabaja en cadena (varios cuadros a la vez) y en una GPU AMD tarda
+// ~7-8 ms tanto a 1080p como a 1440p, aun a 165 fps. Con pocos cuadros (pantalla quieta) no se juzga.
 [[nodiscard]] inline bool overloaded(double encode_ms, double interval_ms, double skipped_percent,
                                      std::uint64_t frames) noexcept {
-    return frames >= 10 && interval_ms > 0 && (encode_ms > interval_ms || skipped_percent > 10.0);
+    return frames >= 10 && interval_ms > 0 && (skipped_percent > 10.0 || encode_ms > 2.5 * interval_ms);
 }
 
 struct Step {

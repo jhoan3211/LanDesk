@@ -352,8 +352,9 @@ void App::draw_stream_settings(bool live) {
              "con la codificación. Solo si la GPU del host lo soporta.");
         row("Ajuste automático");
         if (ImGui::Checkbox("##adaptive", &s.adaptive)) changed = true;
-        help("Si el codificador del host tarda más que el tiempo entre cuadros, baja la resolución (hasta 720p) "
-             "y luego los FPS, para que la latencia no crezca. Se avisa con un mensaje.");
+        help("Si el codificador del host no da abasto (se salta más del 10 % de los cuadros o se le acumulan), baja la "
+             "resolución (hasta 720p) y luego los FPS, y avisa. Que un cuadro tarde más que el tiempo entre cuadros no es "
+             "un problema: el codificador trabaja en cadena.");
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();

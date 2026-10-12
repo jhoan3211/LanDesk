@@ -7,10 +7,12 @@
 using namespace lancast;
 
 TEST(Adapt, DetectsOverload) {
-    // 1440p a 165 fps (6,06 ms entre cuadros) con 10,7 ms por cuadro: sobrecarga.
-    EXPECT_TRUE(adapt::overloaded(10.7, 1000.0 / 165, 0, 120));
-    // Mismo tiempo a 60 fps (16,7 ms): da abasto.
+    // Codificador en cadena: 8 ms por cuadro a 165 fps (6,06 ms entre cuadros) sin saltos NO es sobrecarga
+    // (antes bajaba la calidad sin ganar latencia).
+    EXPECT_FALSE(adapt::overloaded(8.1, 1000.0 / 165, 0, 160));
     EXPECT_FALSE(adapt::overloaded(10.7, 1000.0 / 60, 0, 60));
+    // Los cuadros se acumulan (latencia > 2,5 intervalos): sobrecarga.
+    EXPECT_TRUE(adapt::overloaded(16.0, 1000.0 / 165, 0, 120));
     // Cuadros saltados por un codificador ocupado.
     EXPECT_TRUE(adapt::overloaded(5.0, 1000.0 / 60, 25.0, 45));
     // Pantalla quieta (pocos cuadros): no se juzga.

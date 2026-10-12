@@ -97,7 +97,7 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 - **Configuración del stream** (antes y durante la sesión, sin reconectar): monitor (o todos), resolución (igual a esta pantalla, 720p, 1080p, 1440p, 4K o personalizada), FPS (igual a esta pantalla, 30–240 o personalizado), códec (automático, H.264, HEVC, AV1), bitrate (automático o 5–1000 Mbps), CBR/VBR, escalado (ajustar, estirar, 1:1), V-Sync, audio y FEC (0–50 %). **Perfiles** con nombre ("Trabajo 1440p 4:4:4", "Juego 144 Hz", "Celular" y los tuyos).
 - **4:4:4 real** (texto e íconos nítidos, sin bordes de color) con cualquier códec y decodificador: el host empaca el color completo en un cuadro de doble alto y el cliente lo reconstruye con un shader (como AVC444 de Escritorio remoto). Cuesta el doble de trabajo al codificador.
 - **HDR de 10 bits** (HDR10, BT.2020 PQ) con HEVC o AV1: requiere el monitor del host en modo HDR y una GPU AMD o NVIDIA en el host. En una pantalla HDR se ve en HDR; en una SDR se adapta (tone mapping).
-- **Ajuste automático**: si el codificador del host tarda más que el tiempo entre cuadros, baja la resolución (hasta 720p) y luego los FPS, y lo avisa. Nunca deja que se acumulen cuadros esperando (cada uno sumaría latencia).
+- **Ajuste automático**: si el codificador del host no da abasto (se salta más del 10 % de los cuadros o se le acumulan), baja la resolución (hasta 720p) y luego los FPS, y lo avisa. Nunca deja que se acumulen cuadros esperando (cada uno sumaría latencia).
 - **Multi-monitor**: lista de monitores del host con resolución, Hz y posición (incluidas coordenadas negativas); cambio en vivo y **dos monitores a la vez** en dos ventanas.
 - **Control remoto**: mouse absoluto o relativo, rueda, teclado por scancodes, cursor dibujado localmente (sin latencia) y modo solo ver.
 - **Audio** del host (WASAPI loopback, PCM sin compresión: cero latencia de códec). Frecuencia elegible en vivo (la del sistema, 48 000, 44 100, 32 000, 24 000 o 16 000 Hz), estéreo o mono, volumen y búfer de reproducción (5–200 ms).
@@ -149,7 +149,7 @@ Puertos (configurables en *Ajustes*): TCP **47984** (control), TCP **47985** (ar
 - **"No se pudo conectar"**: haz ping a la IP del host. Si el ping funciona, casi siempre es el firewall del host.
 - **Pantalla negra o "Esperando video"**: actualiza el driver de la GPU del host. Revisa *Diagnóstico* en ambos equipos (codificadores en el host y decodificadores en el cliente).
 - **Volver a pedir PIN**: en el host, *Este equipo (host)* → *Equipos emparejados* → *Olvidar*.
-- **"Ajuste automático: el codificador tardaba…"**: la GPU del host no da abasto con esa resolución y FPS. Baja la resolución, usa "Igual a esta pantalla" o quita 4:4:4. Se puede desactivar en *Ajustes → Ajuste automático*.
+- **"Ajuste automático: el codificador no daba abasto…"**: la GPU del host no da abasto con esa resolución y FPS. Baja la resolución, usa "Igual a esta pantalla" o quita 4:4:4. Se puede desactivar en *Ajustes → Ajuste automático*.
 - **Pedí HDR pero llega SDR**: el aviso al conectar dice por qué (monitor del host sin HDR activado, cliente sin HEVC/AV1, GPU sin 10 bits, monitor girado…).
 - **LanCast se cerró solo**: al volver a abrirlo avisa y guarda un informe en *Diagnóstico → Cierres inesperados*. Sirve para encontrar el error (junto con `LanCast.pdb` del mismo release).
 - **Registro**: *Ajustes* → *Registro*, o el archivo `%APPDATA%\LanCast\lancast.log` (con el servicio: `C:\ProgramData\LanCast\agent.log`).

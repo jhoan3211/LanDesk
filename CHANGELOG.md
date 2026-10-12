@@ -3,6 +3,11 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.6.1
+
+### PC (host)
+- **Arreglo: el ajuste automático bajaba la calidad sin necesidad.** Tomaba como "sobrecarga" que un cuadro tardara más en codificarse que el tiempo entre cuadros, pero el codificador trabaja en cadena (varios cuadros a la vez): en una GPU AMD tarda ~7-8 ms tanto a 1080p como a 1440p y aun así entrega 165 fps. Resultado: bajaba a 720p y menos FPS sin ganar latencia. Ahora solo baja si se saltan más del 10 % de los cuadros o si se acumulan (latencia mayor a 2,5 intervalos).
+
 ## 1.6.0
 
 ### PC (cliente)

@@ -425,11 +425,12 @@ void Streamer::run() {
                 overload_windows_ = overloaded ? overload_windows_ + 1 : 0;
                 if (overload_windows_ >= 2 && encoded_us >= adapt_hold_until_us_) {
                     overload_windows_ = 0;
-                    adapt_reason_ = stats_.encode_ms > interval_ms
-                                        ? std::format("el codificador tardaba {:.1f} ms por cuadro (hay {:.1f} ms entre cuadros)",
-                                                      stats_.encode_ms, interval_ms)
-                                        : std::format("el codificador no daba abasto ({:.0f} % de cuadros saltados)",
-                                                      stats_.skipped_percent);
+                    adapt_reason_ = stats_.skipped_percent > 10.0
+                                        ? std::format("el codificador no daba abasto ({:.0f} % de cuadros saltados)",
+                                                      stats_.skipped_percent)
+                                        : std::format("los cuadros se acumulaban en el codificador ({:.1f} ms por cuadro, "
+                                                      "{:.1f} ms entre cuadros)",
+                                                      stats_.encode_ms, interval_ms);
                     adapt_requested_ = true;
                 }
                 window_skipped_ = 0;
