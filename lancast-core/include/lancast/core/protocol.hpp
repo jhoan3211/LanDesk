@@ -59,6 +59,7 @@ enum class MsgType : std::uint8_t {
     LatencyMark = 32,   // Host -> cliente: instante en que el marcador cambió y dónde está.
     StreamStopped = 33, // Host -> cliente: el stream secundario se detuvo (o no pudo iniciarse).
     SecureAttention = 34, // Cliente -> host: Ctrl+Alt+Supr (solo con el host como servicio).
+    Text = 35,            // Cliente -> host: texto escrito (UTF-8, TextMessage); teclados de celular.
 
     // Canal de archivos
     FileHello = 40,
