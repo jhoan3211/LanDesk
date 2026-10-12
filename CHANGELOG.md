@@ -3,6 +3,12 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.5.3
+
+### PC (host)
+- **Menos latencia en la conversión de color**: el host convierte la captura a NV12 con un shader propio en lugar del procesador de video de la GPU. Medido en una GPU AMD: 0,7 ms contra 2,5 ms (1440p a 1080p) y 0,8 contra 1,2 ms (1440p a 1440p). En la prueba de extremo a extremo, captura + codificación bajó de ~5,6 a ~4,4 ms. Con un monitor girado se sigue usando el procesador de video.
+- Medición de la tubería (`LANCAST_BENCH=1`): conversión y codificación por códec, resolución y FPS.
+
 ## 1.5.2
 
 ### PC
