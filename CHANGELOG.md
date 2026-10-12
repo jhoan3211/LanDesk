@@ -3,6 +3,14 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.6.0
+
+### PC (cliente)
+- **Gráficos en tiempo real** de los últimos 10 segundos (botón *Gráficos* en la barra del stream, en el menú o `Ctrl+Alt+Shift+G`):
+  - **Latencia por cuadro** desglosada: host (captura + codificación), red, decodificación + dibujo y espera hasta la pantalla. Se marcan los picos y los eventos: cuadro perdido (rojo), reparado por FEC (naranja) y keyframes o pedidos de keyframe (violeta).
+  - **Bitrate** cada 250 ms con la **pérdida de paquetes** en barras rojas.
+  - **FPS** y **RTT**.
+
 ## 1.5.3
 
 ### PC (host)

@@ -71,6 +71,8 @@ bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
                 settings_.client.show_stats = show_stats_;
                 save_settings();
             }
+        } else if (vk == 'G') {
+            if (down) toggle_graphs();
         } else if (vk == 'M') {
             if (down) show_menu_ = !show_menu_;
         } else if (vk == 'F') {

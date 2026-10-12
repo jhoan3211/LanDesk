@@ -117,6 +117,8 @@ private:
     void draw_diagnostics_page();
     void draw_stream_overlay();
     void draw_stats_overlay();
+    void draw_graphs();
+    void toggle_graphs();
     void draw_stream_toolbar();
     struct TabResult {
         bool clicked = false;

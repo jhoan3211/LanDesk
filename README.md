@@ -82,6 +82,7 @@ Por defecto la resolución y los FPS son **"Igual a esta pantalla"**: el cliente
 |---|---|
 | `Ctrl+Alt+Shift+M` | Menú: configuración del stream en vivo, monitores, archivos, desconectar |
 | `Ctrl+Alt+Shift+S` | Estadísticas (FPS, bitrate, latencias por etapa, pérdidas, FEC) |
+| `Ctrl+Alt+Shift+G` | Gráficos en tiempo real: latencia por cuadro (por etapa), bitrate, pérdidas, FPS y RTT |
 | `Ctrl+Alt+Shift+F` | Pantalla completa |
 | `Ctrl+Alt+Shift+1…9` | Cambiar al monitor 1…9 del host (`0` = todos) |
 | `Ctrl+Alt+Shift+R` | Mouse relativo (para juegos) |
