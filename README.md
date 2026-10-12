@@ -25,7 +25,7 @@ Requisitos: Windows 10 (1809+) u 11 de 64 bits y una GPU con codificación/decod
 3. El celular debe estar en la **misma red** que los PC (por ejemplo, Wi-Fi del access point conectado al switch, IP `192.168.40.x`).
 4. Abre LanCast en el celular: los PC aparecen solos en **Equipos en la red** (o escribe la IP). La primera vez escribe el **PIN** que muestra el PC.
 
-En el PC hace falta LanCast **1.5** o superior para escribir texto desde el teclado del celular (el resto funciona desde la 1.4).
+En el PC hace falta LanCast **1.5** o superior para escribir texto desde el teclado del celular, y **1.7** para mandos, archivos y Wake-on-LAN (el resto funciona desde la 1.4). Desde la 1.7 la app avisa sola cuando hay una versión nueva y se actualiza (con verificación SHA-256).
 
 | Gesto (modo touchpad) | Acción en el PC |
 |---|---|
@@ -42,7 +42,14 @@ La **bolita del teclado** a la derecha abre y cierra el teclado (arrástrala par
 
 En **modo directo** el clic cae donde tocas. La **pestaña** de arriba al centro abre la barra: teclado, modo, monitor, calidad, Ctrl+Alt+Supr, zoom 1:1, estadísticas y desconectar. Con el teclado abierto aparece una barra con Esc, Tab, Ctrl, Alt, Mayús, Win, flechas, Inicio, Fin, Supr y F1–F12 (Ctrl/Alt/Mayús quedan fijados para la siguiente tecla: Ctrl → C = copiar).
 
-La app usa el decodificador de **hardware** del teléfono en modo de baja latencia, pide al PC la resolución y los Hz de la pantalla del celular, mantiene el Wi-Fi en modo de baja latencia mientras transmite y se reconecta sola si se corta.
+La app usa el decodificador de **hardware** del teléfono en modo de baja latencia, pide al PC la resolución y los Hz de la pantalla del celular (y pone la pantalla a esa frecuencia), mantiene el Wi-Fi en modo de baja latencia mientras transmite, usa siempre el Wi-Fi aunque no tenga internet y se reconecta sola si se corta.
+
+Además:
+- **S Pen, mouse y teclado Bluetooth**: el puntero va donde apuntas (punta o botón izquierdo = clic, botón del lápiz o derecho = clic derecho, rueda); el teclado físico manda teclas reales (atajos y juegos).
+- **Mandos**: un mando conectado al teléfono o el **mando en pantalla** (botón *Mando*) aparece en el PC como mando de Xbox 360. En el PC hace falta el driver gratuito [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases).
+- **Portapapeles** en los dos sentidos y **archivos** (botón *Archivos*; lo recibido va a *Descargas/LanCast*).
+- **Gráficos** en tiempo real (latencia, decodificación, bitrate, FPS y pérdidas).
+- **Despertar un PC** apagado o suspendido: *Equipos emparejados* → ⋯ → *Despertar* (Wake-on-LAN activado en la BIOS y en la tarjeta de red del PC).
 
 ## Primer uso: conectar un PC a otro
 

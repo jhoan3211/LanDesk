@@ -50,6 +50,7 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("intra_refresh", s.intra_refresh);
     t.set("slices", s.slices);
     t.set("adaptive", s.adaptive);
+    t.set("pacing_mbps", static_cast<std::int64_t>(s.pacing_mbps));
 }
 
 StreamSettings stream_from_table(const toml::Table& t) {
@@ -79,6 +80,7 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.intra_refresh = t.get_bool("intra_refresh").value_or(s.intra_refresh);
     s.slices = t.get_bool("slices").value_or(s.slices);
     s.adaptive = t.get_bool("adaptive").value_or(s.adaptive);
+    s.pacing_mbps = clamp_u32(t.get_int("pacing_mbps").value_or(0), 0, 10000);
     return s;
 }
 
@@ -162,6 +164,7 @@ std::string settings_to_toml(const AppSettings& s) {
     c.set("active_profile", s.client.active_profile);
     c.set("view_only", s.client.view_only);
     c.set("clipboard_sync", s.client.clipboard_sync);
+    c.set("forward_gamepads", s.client.forward_gamepads);
     c.set("relative_mouse", s.client.relative_mouse);
     c.set("show_stats", s.client.show_stats);
     c.set("show_graphs", s.client.show_graphs);
@@ -215,6 +218,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.client.active_profile = c->get_string("active_profile").value_or("");
         s.client.view_only = c->get_bool("view_only").value_or(s.client.view_only);
         s.client.clipboard_sync = c->get_bool("clipboard_sync").value_or(s.client.clipboard_sync);
+        s.client.forward_gamepads = c->get_bool("forward_gamepads").value_or(s.client.forward_gamepads);
         s.client.relative_mouse = c->get_bool("relative_mouse").value_or(s.client.relative_mouse);
         s.client.show_stats = c->get_bool("show_stats").value_or(s.client.show_stats);
         s.client.show_graphs = c->get_bool("show_graphs").value_or(false);

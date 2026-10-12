@@ -7,6 +7,9 @@
 //
 // Imprime "READY" cuando acepta conexiones y "PIN <6 dígitos>" cuando un cliente pide emparejarse. El control
 // remoto está desactivado (no mueve el mouse ni escribe en el equipo). Termina al cerrarse su entrada estándar.
+//
+// Archivos: la línea "SEND <ruta>" en la entrada estándar envía ese archivo al cliente; al recibir uno imprime
+// "RECEIVED <ok|fail> <nombre>".
 
 #include <windows.h>
 
@@ -63,14 +66,21 @@ int main(int argc, char** argv) {
         s.host.receive_folder = (dir / "recibidos").string();
 
         host::HostService host;
+        host.files().on_received = [](const files::Item& item) {
+            std::printf("RECEIVED %s %s\n", item.state == files::State::Done ? "ok" : "fail", item.name.c_str());
+            std::fflush(stdout);
+        };
         host.start(s);
         bool ready = false;
         std::string last_pin;
         // Fin al cerrarse stdin (el proceso de prueba terminó).
         bool stdin_open = true;
         std::thread watcher([&] {
-            char buf[64];
+            char buf[1024];
             while (std::fgets(buf, sizeof(buf), stdin) != nullptr) {
+                std::string line = buf;
+                while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
+                if (line.starts_with("SEND ")) host.files().send({std::filesystem::path(line.substr(5))});
             }
             stdin_open = false;
         });

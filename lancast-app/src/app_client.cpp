@@ -103,6 +103,7 @@ proto::StreamConfig App::make_stream_config() const {
     c.intra_refresh = s.intra_refresh;
     c.slices = s.slices;
     c.adaptive = s.adaptive;
+    c.pacing_mbps = s.pacing_mbps;
     return c;
 }
 

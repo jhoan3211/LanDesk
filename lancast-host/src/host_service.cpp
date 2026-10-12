@@ -13,6 +13,7 @@
 #include "lancast/core/media.hpp"
 #include "lancast/platform/audio.hpp"
 #include "lancast/platform/d3d.hpp"
+#include "lancast/platform/gamepad.hpp"
 #include "lancast/platform/input.hpp"
 #include "lancast/platform/marker_window.hpp"
 #include "lancast/platform/media_sender.hpp"
@@ -74,6 +75,7 @@ struct Session {
     std::mutex clipboard_mutex;
     std::string last_remote_clipboard;
     std::unique_ptr<sys::MarkerWindow> latency_marker;  // Solo mientras el cliente mide la latencia.
+    gamepad::VirtualPads pads;  // Mandos del cliente (se quitan al cerrar la sesión).
 };
 
 struct HostService::Impl {
@@ -520,6 +522,13 @@ struct HostService::Impl {
         info.secure_desktop = service_mode;
         info.media_port = hs.media_port;
         info.file_port = static_cast<std::uint16_t>(hs.control_port + 1);
+        info.gamepad_available = hs.allow_input && gamepad::driver_available();
+        for (const auto& a : net::local_addresses()) {
+            if (a.mask != 0 && (a.ip & a.mask) == (s.address.ip & a.mask)) {
+                info.mac = a.mac;
+                break;
+            }
+        }
         s.channel->send(proto::encode(proto::MsgType::HostInfo, info));
     }
 
@@ -693,6 +702,9 @@ struct HostService::Impl {
                     break;
                 case proto::MsgType::ReleaseAll:
                     s.injector.release_all();
+                    break;
+                case proto::MsgType::Gamepad:
+                    if (auto g = proto::GamepadState::read(r); g && control) s.pads.update(*g);
                     break;
                 case proto::MsgType::Text:
                     if (auto t = proto::TextMessage::read(r); t && control && t->text.size() <= 4096) s.injector.text(t->text);

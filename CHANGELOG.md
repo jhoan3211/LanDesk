@@ -1,7 +1,28 @@
 # Cambios
 
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
-(`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
+(`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar; el de `LanCast.apk` ("SHA-256 de LanCast.apk: …") se agrega al subir el APK (la app lo exige para actualizarse).
+
+## 1.7.0
+
+### App Android
+- **Funciona aunque el Wi-Fi no tenga internet**: la app usa siempre el Wi-Fi para hablar con los PC (antes Android podía mandar el tráfico por los datos móviles y no los encontraba).
+- **Gráficos en tiempo real** (botón *Gráficos*): latencia de red (promedio y picos), decodificación, bitrate y FPS de los últimos 30 segundos, con marcas de cuadros perdidos y reparados.
+- **Imagen más fluida**: la pantalla del teléfono se pone a la frecuencia del stream (por ejemplo 120 Hz) en vez de que Android la baje a 60 Hz.
+- **S Pen, mouse y teclado Bluetooth**: el S Pen y el mouse apuntan exactamente donde están (punta = clic, botón del lápiz o botón derecho = clic derecho, rueda); el teclado físico manda cada tecla con pulsar y soltar, así funcionan los atajos y los juegos.
+- **Mandos**: un mando Bluetooth/USB conectado al teléfono, o el **mando en pantalla** (botón *Mando*), aparece en el PC como un mando de Xbox 360. Requiere el driver gratuito **ViGEmBus** en el PC (<https://github.com/nefarius/ViGEmBus/releases>).
+- **Portapapeles** en los dos sentidos: lo copiado en el PC queda en el teléfono; lo copiado en el teléfono pasa al PC al volver a LanCast.
+- **Archivos**: botón *Archivos* para enviar al PC; lo que manda el PC se guarda en *Descargas/LanCast*. Con verificación SHA-256, igual que entre PC.
+- **Se actualiza sola**: avisa cuando hay una versión nueva en GitHub, la descarga, comprueba su SHA-256 y la instala (Android pide confirmación).
+- **Despertar un PC** (Wake-on-LAN): en *Equipos emparejados* → ⋯ → *Despertar*. El PC debe tener Wake-on-LAN activado en la BIOS y en la tarjeta de red.
+- **Ritmo de envío** en *Calidad*, por si hay cortes por Wi-Fi.
+
+### PC
+- **Mandos virtuales**: el host crea mandos de Xbox 360 para los mandos del cliente (teléfono o PC). Necesita el driver ViGEmBus; sin él, avisa y los ignora.
+- **El cliente de PC envía sus mandos** (XInput) al host. Se puede desactivar en *Ajustes → Cliente*.
+- **Ritmo de envío** (*Calidad*): el host reparte los paquetes de cada cuadro a un ritmo máximo en lugar de mandarlos de golpe. Por cable no hace falta; por Wi-Fi o pasando por un router de 1 Gb evita que las ráfagas se pierdan.
+- El host informa su MAC al cliente (para Wake-on-LAN).
+- Se midió subir la prioridad de GPU del host con la GPU ocupada por otro proceso: en una GPU AMD integrada no cambia nada (hay que esperar igual a que termine el trabajo que ya está en la GPU), así que no se incluye.
 
 ## 1.6.1
 

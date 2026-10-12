@@ -73,6 +73,12 @@ class TouchController(private val host: Host, private val density: Float) {
         }
     }
 
+    // Mouse o S Pen: el cursor va exactamente donde apunta.
+    fun setCursor(nx: Float, ny: Float) {
+        cx = nx.coerceIn(0f, 1f)
+        cy = ny.coerceIn(0f, 1f)
+    }
+
     // Sincroniza con la posición real del cursor del PC (cuando no se está tocando).
     fun syncCursor(nx: Float, ny: Float) {
         if (touching) return

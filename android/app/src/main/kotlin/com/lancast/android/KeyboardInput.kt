@@ -68,6 +68,62 @@ object Scancodes {
         in KeyEvent.KEYCODE_F1..KeyEvent.KEYCODE_F12 -> f(code - KeyEvent.KEYCODE_F1 + 1)
         else -> null
     }
+
+    // Teclado físico (Bluetooth/USB): cada tecla por su posición, con pulsar y soltar por separado, así funcionan
+    // atajos, juegos y la distribución de teclado que tenga el PC.
+    fun forHardware(code: Int): K? {
+        forKeyCode(code)?.let { return it }
+        if (code in KeyEvent.KEYCODE_A..KeyEvent.KEYCODE_Z) return forChar('a' + (code - KeyEvent.KEYCODE_A))
+        if (code in KeyEvent.KEYCODE_1..KeyEvent.KEYCODE_9) return K(0x02 + (code - KeyEvent.KEYCODE_1))
+        return when (code) {
+            KeyEvent.KEYCODE_0 -> K(0x0B)
+            KeyEvent.KEYCODE_MINUS -> K(0x0C)
+            KeyEvent.KEYCODE_EQUALS -> K(0x0D)
+            KeyEvent.KEYCODE_LEFT_BRACKET -> K(0x1A)
+            KeyEvent.KEYCODE_RIGHT_BRACKET -> K(0x1B)
+            KeyEvent.KEYCODE_SEMICOLON -> K(0x27)
+            KeyEvent.KEYCODE_APOSTROPHE -> K(0x28)
+            KeyEvent.KEYCODE_GRAVE -> K(0x29)
+            KeyEvent.KEYCODE_BACKSLASH -> K(0x2B)
+            KeyEvent.KEYCODE_COMMA -> K(0x33)
+            KeyEvent.KEYCODE_PERIOD -> K(0x34)
+            KeyEvent.KEYCODE_SLASH -> K(0x35)
+            KeyEvent.KEYCODE_SPACE -> SPACE
+            KeyEvent.KEYCODE_CTRL_LEFT -> CTRL
+            KeyEvent.KEYCODE_CTRL_RIGHT -> K(0x1D, true)
+            KeyEvent.KEYCODE_SHIFT_LEFT -> SHIFT
+            KeyEvent.KEYCODE_SHIFT_RIGHT -> K(0x36)
+            KeyEvent.KEYCODE_ALT_LEFT -> ALT
+            KeyEvent.KEYCODE_ALT_RIGHT -> K(0x38, true)
+            KeyEvent.KEYCODE_META_LEFT -> WIN
+            KeyEvent.KEYCODE_META_RIGHT -> K(0x5C, true)
+            KeyEvent.KEYCODE_MENU -> K(0x5D, true)
+            KeyEvent.KEYCODE_CAPS_LOCK -> K(0x3A)
+            KeyEvent.KEYCODE_NUM_LOCK -> K(0x45)
+            KeyEvent.KEYCODE_SCROLL_LOCK -> K(0x46)
+            KeyEvent.KEYCODE_SYSRQ -> K(0x37, true)
+            KeyEvent.KEYCODE_BREAK -> K(0x45, true)
+            KeyEvent.KEYCODE_INSERT -> K(0x52, true)
+            KeyEvent.KEYCODE_NUMPAD_DIVIDE -> K(0x35, true)
+            KeyEvent.KEYCODE_NUMPAD_MULTIPLY -> K(0x37)
+            KeyEvent.KEYCODE_NUMPAD_SUBTRACT -> K(0x4A)
+            KeyEvent.KEYCODE_NUMPAD_ADD -> K(0x4E)
+            KeyEvent.KEYCODE_NUMPAD_DOT -> K(0x53)
+            KeyEvent.KEYCODE_NUMPAD_0 -> K(0x52)
+            KeyEvent.KEYCODE_NUMPAD_1 -> K(0x4F)
+            KeyEvent.KEYCODE_NUMPAD_2 -> K(0x50)
+            KeyEvent.KEYCODE_NUMPAD_3 -> K(0x51)
+            KeyEvent.KEYCODE_NUMPAD_4 -> K(0x4B)
+            KeyEvent.KEYCODE_NUMPAD_5 -> K(0x4C)
+            KeyEvent.KEYCODE_NUMPAD_6 -> K(0x4D)
+            KeyEvent.KEYCODE_NUMPAD_7 -> K(0x47)
+            KeyEvent.KEYCODE_NUMPAD_8 -> K(0x48)
+            KeyEvent.KEYCODE_NUMPAD_9 -> K(0x49)
+            KeyEvent.KEYCODE_NUMPAD_ENTER -> K(0x1C, true)
+            KeyEvent.KEYCODE_ZENKAKU_HANKAKU -> K(0x29)
+            else -> null
+        }
+    }
 }
 
 // Vista invisible que recibe el teclado del teléfono y lo envía al PC.

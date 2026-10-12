@@ -124,6 +124,7 @@ void HostInfo::write(ByteWriter& w) const {
     w.boolean(audio_available).boolean(input_allowed).boolean(clipboard_allowed).boolean(files_allowed);
     w.u16(media_port).u16(file_port);
     w.boolean(secure_desktop);
+    w.raw(mac).boolean(gamepad_available);
 }
 
 std::optional<HostInfo> HostInfo::read(ByteReader& r) {
@@ -148,6 +149,10 @@ std::optional<HostInfo> HostInfo::read(ByteReader& r) {
     h.media_port = r.u16();
     h.file_port = r.u16();
     if (r.remaining() >= 1) h.secure_desktop = r.boolean();
+    if (r.remaining() >= 7) {
+        h.mac = r.fixed<6>();
+        h.gamepad_available = r.boolean();
+    }
     return finish(r, std::move(h));
 }
 
@@ -160,6 +165,7 @@ void StreamConfig::write(ByteWriter& w) const {
     w.boolean(intra_refresh).boolean(slices);
     w.u8(stream_index).boolean(enabled);
     w.boolean(adaptive);
+    w.u32(pacing_mbps);
 }
 
 std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
@@ -189,6 +195,7 @@ std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
             c.enabled = r.boolean();
         }
         if (r.remaining() >= 1) c.adaptive = r.boolean();
+        if (r.remaining() >= 4) c.pacing_mbps = r.u32();
     } else {
         c.intra_refresh = false;
         c.slices = false;

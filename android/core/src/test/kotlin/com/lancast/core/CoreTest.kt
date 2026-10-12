@@ -151,8 +151,8 @@ class CoreTest {
 
     @Test
     fun streamConfigHasHostLayout() {
-        // u32×4, codec, auto, bitrate, rc, 444, hdr, audio, fec, audio_rate, canales, ll, ir, slices, índice, activo, adaptive.
-        assertEquals(1 + 38, StreamConfig().encode().size)  // = StreamConfig::write del host
+        // u32×4, codec, auto, bitrate, rc, 444, hdr, audio, fec, audio_rate, canales, ll, ir, slices, índice, activo, adaptive, ritmo (u32).
+        assertEquals(1 + 42, StreamConfig().encode().size)  // = StreamConfig::write del host
         assertEquals(MsgType.STREAM_CONFIG, StreamConfig().encode()[0].toInt())
     }
 }

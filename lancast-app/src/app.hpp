@@ -5,6 +5,7 @@
 #include <dxgi1_6.h>
 #include <wrl/client.h>
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <mutex>
@@ -95,6 +96,7 @@ private:
     void process_client();
     void set_relative_mouse(bool on);
     void send_mouse_position();
+    void poll_gamepads();
     void handle_mouse_button(UINT msg, WPARAM wp);
     [[nodiscard]] bool control_enabled() const;
     [[nodiscard]] bool ui_captures_mouse() const;
@@ -191,6 +193,8 @@ private:
     bool mod_alt_[2] = {false, false};
     bool mod_shift_[2] = {false, false};
     std::string last_remote_clipboard_;
+    std::array<proto::GamepadState, 4> pads_sent_{};  // Último estado enviado de cada mando (connected = presente).
+    std::uint64_t pads_scan_us_ = 0;                   // Los huecos vacíos se revisan cada 2 s (XInput es lento ahí).
     std::uint64_t last_present_us_ = 0;
     bool frame_presented_since_stream_ = false;
     client::State last_client_state_ = client::State::Idle;

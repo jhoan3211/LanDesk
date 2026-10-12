@@ -124,6 +124,42 @@ class InteropTest {
             assertTrue(l2.connected.await(15, TimeUnit.SECONDS), "No reconectó: ${l2.closed.get()}")
             assertFalse(l2.needPin.get(), "Emparejado: no debe pedir PIN")
             assertTrue(l2.gotKeyframe.await(10, TimeUnit.SECONDS))
+
+            // Mandos (1.7): el host de prueba no permite el control, así que los ignora, pero la sesión sigue.
+            assertEquals(false, s2.hostInfo?.gamepadAvailable)
+            s2.send(Messages.gamepad(GamepadState(buttons = GamepadState.A, leftX = -32768, rightTrigger = 255)))
+            s2.send(Messages.gamepad(GamepadState(connected = false)))
+
+            // Archivos en los dos sentidos (canal propio, cifrado, con SHA-256).
+            val received = LinkedBlockingQueue<Pair<String, ByteArray>>()
+            val sink = object : FileSink {
+                val buffers = HashMap<String, java.io.ByteArrayOutputStream>()
+                override fun open(name: String, size: Long) = java.io.ByteArrayOutputStream().also { synchronized(buffers) { buffers[name] = it } }
+                override fun finished(name: String, ok: Boolean, message: String) {
+                    received.put(name to if (ok) synchronized(buffers) { buffers[name]!!.toByteArray() } else ByteArray(0))
+                }
+            }
+            val results = LinkedBlockingQueue<FileProgress>()
+            val files = s2.openFiles(sink) { if (it.finished) results.put(it) }
+            assertNotNull(files, "No se abrió el canal de archivos")
+            val up = ByteArray(700_000) { (it * 31 % 251).toByte() }
+            files.send("desde-el-celular.bin", up.size.toLong(), 0) { up.inputStream() }
+            val sent = results.poll(20, TimeUnit.SECONDS)
+            assertNotNull(sent, "El envío no terminó")
+            assertTrue(sent.ok, "Envío al PC: ${sent.message}")
+            assertNotNull(waitLine("RECEIVED ok desde-el-celular.bin", 10), "El PC no confirmó la recepción")
+            assertTrue(up.contentEquals(File(dir, "recibidos/desde-el-celular.bin").readBytes()), "Contenido distinto en el PC")
+
+            val down = ByteArray(5_000_000) { (it * 7 % 253).toByte() }  // Más de un bloque de 4 MB del PC.
+            val src = File(dir, "para-el-celular.bin").apply { writeBytes(down) }
+            proc.outputStream.write("SEND ${src.path}\n".toByteArray())
+            proc.outputStream.flush()
+            val got = received.poll(30, TimeUnit.SECONDS)
+            assertNotNull(got, "No llegó el archivo del PC")
+            assertEquals("para-el-celular.bin", got.first)
+            assertTrue(down.contentEquals(got.second), "Contenido distinto en el teléfono")
+            println("  Archivos: 700 KB al PC y 5 MB al teléfono, verificados con SHA-256")
+            files.close()
             s2.close()
 
             // 3) Descubrimiento en la red local (el host responde a broadcast y a localhost).

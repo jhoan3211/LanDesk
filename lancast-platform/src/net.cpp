@@ -353,7 +353,9 @@ std::vector<LocalAddress> local_addresses() {
             if (u->Address.lpSockaddr->sa_family != AF_INET) continue;
             const std::uint32_t ip = ntohl(reinterpret_cast<sockaddr_in*>(u->Address.lpSockaddr)->sin_addr.s_addr);
             const std::uint32_t mask = u->OnLinkPrefixLength == 0 ? 0 : (~0u << (32 - u->OnLinkPrefixLength));
-            out.push_back(LocalAddress{ip, ip | ~mask, platform::detail::to_utf8(a->FriendlyName), a->FirstGatewayAddress != nullptr});
+            LocalAddress la{ip, ip | ~mask, platform::detail::to_utf8(a->FriendlyName), a->FirstGatewayAddress != nullptr, mask, {}};
+            if (a->PhysicalAddressLength == 6) std::copy_n(a->PhysicalAddress, 6, la.mac.begin());
+            out.push_back(std::move(la));
         }
     }
     std::ranges::stable_sort(out, [](const LocalAddress& x, const LocalAddress& y) { return x.has_gateway > y.has_gateway; });

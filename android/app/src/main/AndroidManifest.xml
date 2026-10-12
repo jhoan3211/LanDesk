@@ -6,8 +6,11 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Wi-Fi de baja latencia mientras se transmite (WifiManager.WIFI_MODE_FULL_LOW_LATENCY). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Actualizar la app con la versión publicada en GitHub (Android pide confirmación). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
+    <uses-feature android:name="android.hardware.gamepad" android:required="false" />
 
     <application
         android:allowBackup="false"

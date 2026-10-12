@@ -48,6 +48,7 @@ struct StreamSettings {
     bool intra_refresh = false;
     bool slices = true;         // Envío por slices: la red empieza antes de que termine de codificarse el cuadro.
     bool adaptive = true;       // El host baja resolución/FPS solo si su codificador no da abasto.
+    std::uint32_t pacing_mbps = 0;  // Ritmo máximo de envío de cada cuadro (0 = sin límite; útil por Wi-Fi).
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;
 };
@@ -84,6 +85,7 @@ struct ClientSettings {
     std::vector<Profile> profiles;
     bool view_only = false;
     bool clipboard_sync = true;
+    bool forward_gamepads = true;  // Mandos XInput de este PC -> mandos virtuales en el host (driver ViGEmBus allí).
     bool relative_mouse = false;
     bool show_stats = false;
     bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).
