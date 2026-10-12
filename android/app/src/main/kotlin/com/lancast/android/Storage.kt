@@ -62,6 +62,15 @@ class Storage(context: Context) : PairingStore {
         get() = prefs.getBoolean("touchpad", true)
         set(v) = prefs.edit().putBoolean("touchpad", v).apply()
 
+    // Botón flotante del teclado a la derecha (y su altura, 0..1).
+    var keyboardBubble: Boolean
+        get() = prefs.getBoolean("keyboard_bubble", true)
+        set(v) = prefs.edit().putBoolean("keyboard_bubble", v).apply()
+
+    var bubbleY: Float
+        get() = prefs.getFloat("bubble_y", 0.6f)
+        set(v) = prefs.edit().putFloat("bubble_y", v).apply()
+
     var showStats: Boolean
         get() = prefs.getBoolean("stats", false)
         set(v) = prefs.edit().putBoolean("stats", v).apply()

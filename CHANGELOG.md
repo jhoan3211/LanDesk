@@ -8,6 +8,8 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 ### App para Android
 - **Arreglo: la conexión se cortaba y reconectaba al tocar la pantalla.** El toque y el teclado enviaban desde el hilo de la interfaz, Android lo bloqueaba y el contador del cifrado quedaba desfasado: el PC rechazaba el siguiente mensaje y cerraba la sesión. Ahora todo sale por una cola en su propio hilo y el contador solo avanza cuando el mensaje sale.
 - **Mover la vista con zoom arrastrando con tres dedos**, en los dos modos (en modo directo antes no había cómo moverse con el zoom). Tocar con tres dedos sin moverlos sigue abriendo el teclado.
+- **Teclado flotante**: una bolita a la derecha abre y cierra el teclado; se arrastra para subirla o bajarla y se activa o desactiva en la barra de opciones (*Teclado flotante*).
+- **Gira con el teléfono**: horizontal o vertical según la rotación automática; la vista y el zoom se reacomodan sin cortar la sesión.
 - **Bitrate para Wi-Fi**: 40 Mbps por defecto (antes el automático, que a 1440p y 120 fps superaba 150 Mbps y las ráfagas se perdían entre el router de 1 Gb y el Wi-Fi). Se cambia en *Ajustes* o en *Calidad* durante la sesión (20, 40, 60, 100 Mbps o automático).
 
 ## 1.5.0
