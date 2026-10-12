@@ -5,6 +5,7 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 
 ## 1.7.1
 
+- **App Android: botón *Buscar actualizaciones*** en los ajustes, además de la búsqueda automática al abrir la app (cada 6 horas como mucho). Si el teléfono no tiene la pantalla de *instalar apps desconocidas*, la app explica dónde activarlo.
 - **Mandos: el driver ViGEmBus está descontinuado.** Los textos y avisos ahora lo dicen y enlazan a su última versión, la 1.22.0 (<https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0>). Su autor lo archivó en 2023 y no tendrá más actualizaciones, pero sigue funcionando en Windows 10 y 11 y es el mismo que usan otros programas de streaming. Windows no trae otra forma de crear un mando de Xbox sin un driver: se probó la inyección de mando de Windows (InputInjector) y ni XInput ni Windows.Gaming.Input la ven. Si ya tenías una versión anterior de ViGEmBus, puede que haya que ejecutar su instalador dos veces.
 
 ## 1.7.0
