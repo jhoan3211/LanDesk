@@ -20,6 +20,13 @@ option(LANCAST_WARNINGS_AS_ERRORS "Tratar advertencias como errores" ON)
 
 include(cmake/CompilerWarnings.cmake)
 
+# Release con símbolos (LanCast.pdb aparte): permite leer los volcados de memoria de un cierre inesperado.
+# /OPT:REF e /OPT:ICF mantienen el .exe igual de chico que sin /DEBUG.
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Zi>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
+
 add_subdirectory(lancast-core)
 add_subdirectory(lancast-platform)
 add_subdirectory(lancast-host)

@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "lancast/core/log.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/crypto.hpp"
 #include "lancast/platform/system.hpp"
 
@@ -481,6 +482,7 @@ int run_service() {
     std::error_code ec;
     std::filesystem::create_directories(data_dir(), ec);
     log::set_file(data_dir() / L"service.log");
+    crash::install(data_dir() / L"crashes", "servicio");
     wchar_t name[] = L"LanCastHost";
     SERVICE_TABLE_ENTRYW table[] = {{name, service_main}, {nullptr, nullptr}};
     if (!StartServiceCtrlDispatcherW(table)) {

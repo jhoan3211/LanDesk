@@ -14,6 +14,7 @@
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/platform.hpp"
 #include "lancast/platform/system.hpp"
@@ -740,6 +741,23 @@ void App::draw_diagnostics_page() {
         ImGui::SetClipboardText(format_report_text(*report_, true).c_str());
         toast("Copiado");
     }
+
+    // Cierres inesperados: volcados de memoria guardados por esta app.
+    const auto dumps_dir = sys::app_data_dir() / L"crashes";
+    const auto dumps = crash::list(dumps_dir);
+    if (!dumps.empty()) {
+        section("Cierres inesperados");
+        ImGui::TextWrapped("LanCast guardó un informe (volcado de memoria) de cada cierre inesperado. Sirve para encontrar "
+                           "el error: compártelo solo con quien lo vaya a analizar, porque contiene memoria del programa.");
+        for (std::size_t i = 0; i < std::min<std::size_t>(dumps.size(), 5); ++i) {
+            std::error_code ec;
+            const auto bytes = std::filesystem::file_size(dumps[i], ec);
+            ImGui::BulletText("%s  (%s)", detail::narrow(dumps[i].filename().wstring()).c_str(), human_bytes(bytes).c_str());
+        }
+        if (ImGui::Button("Abrir carpeta de informes")) sys::open_in_explorer(dumps_dir);
+        ImGui::Separator();
+    }
+
     if (!report_) return;
     ImGui::BeginChild("##report", ImVec2(0, 0), ImGuiChildFlags_Borders);
     ImGui::TextUnformatted(format_report_text(*report_, false).c_str());

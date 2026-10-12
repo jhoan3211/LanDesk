@@ -13,6 +13,7 @@
 #include "lancast/core/log.hpp"
 #include "lancast/core/version.hpp"
 #include "lancast/host/host_service.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/crypto.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
@@ -126,6 +127,7 @@ int run_agent() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     platform::enable_per_monitor_dpi_awareness();
     log::set_file(dir / L"agent.log");
+    crash::install(dir / L"crashes", "agente");
     log::info("LanCast {} agente iniciado (sesión {})", kAppVersion, WTSGetActiveConsoleSessionId());
     timeBeginPeriod(1);
 

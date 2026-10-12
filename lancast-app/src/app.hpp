@@ -31,6 +31,7 @@ namespace lancast::app {
 struct LaunchOptions {
     bool minimized = false;
     bool no_host = false;            // Solo cliente (útil para probar dos instancias en el mismo equipo).
+    bool crash_test = false;         // Provoca un cierre inesperado (prueba de los volcados de memoria).
     std::optional<std::string> connect;  // Conectar al iniciar.
     std::optional<std::string> pin;      // PIN para --connect (pruebas automatizadas).
     bool measure_latency = false;        // Medir la latencia real al conectar (pruebas).

@@ -15,6 +15,7 @@
 #include "imgui_impl_win32.h"
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/input.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/platform.hpp"
@@ -285,6 +286,11 @@ int App::run() {
     if (options_.connect) start_connect(*options_.connect);
     std::thread([] { update::cleanup_previous(); }).detach();  // Borra el .old de una actualización anterior.
     if (settings_.check_updates) check_updates(false);
+    if (const auto dump = crash::unseen(sys::app_data_dir() / L"crashes")) {
+        toast("LanCast se cerró inesperadamente la última vez. Se guardó un informe: Diagnóstico → Cierres inesperados");
+        crash::mark_seen(sys::app_data_dir() / L"crashes");
+        log::warn("Volcado de un cierre anterior: {}", detail::narrow(dump->wstring()));
+    }
 
     std::uint64_t last_host_poll = 0;
     while (running_) {
