@@ -60,6 +60,7 @@ enum class MsgType : std::uint8_t {
     StreamStopped = 33, // Host -> cliente: el stream secundario se detuvo (o no pudo iniciarse).
     SecureAttention = 34, // Cliente -> host: Ctrl+Alt+Supr (solo con el host como servicio).
     Text = 35,            // Cliente -> host: texto escrito (UTF-8, TextMessage); teclados de celular.
+    Gamepad = 36,         // Cliente -> host: estado de un mando (GamepadState); 1.7+.
 
     // Canal de archivos
     FileHello = 40,
@@ -156,6 +157,8 @@ struct HostInfo {
     std::uint16_t media_port = 0;
     std::uint16_t file_port = 0;
     bool secure_desktop = false;  // Opcional (1.3+): host como servicio (bloqueo, UAC, Ctrl+Alt+Supr).
+    std::array<std::uint8_t, 6> mac{};  // Opcional (1.7+): MAC del adaptador de la LAN (Wake-on-LAN); ceros = no se sabe.
+    bool gamepad_available = false;     // Opcional (1.7+): el host puede crear mandos virtuales (driver ViGEmBus).
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };
@@ -221,6 +224,38 @@ struct TextMessage {
         TextMessage m{r.str()};
         return r.ok() ? std::optional{std::move(m)} : std::nullopt;
     }
+};
+
+// Estado completo de un mando (formato XInput: botones XUSB_GAMEPAD_*, gatillos 0..255, ejes -32768..32767).
+struct GamepadState {
+    std::uint8_t index = 0;  // 0..3
+    bool connected = true;   // false = el mando se desconectó (el host quita el virtual).
+    std::uint16_t buttons = 0;
+    std::uint8_t left_trigger = 0;
+    std::uint8_t right_trigger = 0;
+    std::int16_t left_x = 0;
+    std::int16_t left_y = 0;
+    std::int16_t right_x = 0;
+    std::int16_t right_y = 0;
+    void write(ByteWriter& w) const {
+        w.u8(index).boolean(connected).u16(buttons).u8(left_trigger).u8(right_trigger);
+        w.u16(static_cast<std::uint16_t>(left_x)).u16(static_cast<std::uint16_t>(left_y));
+        w.u16(static_cast<std::uint16_t>(right_x)).u16(static_cast<std::uint16_t>(right_y));
+    }
+    static std::optional<GamepadState> read(ByteReader& r) {
+        GamepadState g;
+        g.index = r.u8();
+        g.connected = r.boolean();
+        g.buttons = r.u16();
+        g.left_trigger = r.u8();
+        g.right_trigger = r.u8();
+        g.left_x = static_cast<std::int16_t>(r.u16());
+        g.left_y = static_cast<std::int16_t>(r.u16());
+        g.right_x = static_cast<std::int16_t>(r.u16());
+        g.right_y = static_cast<std::int16_t>(r.u16());
+        return r.ok() && g.index < 4 ? std::optional{g} : std::nullopt;
+    }
+    friend bool operator==(const GamepadState&, const GamepadState&) = default;
 };
 
 struct PingPong {

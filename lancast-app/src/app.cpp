@@ -317,6 +317,7 @@ int App::run() {
         if (!running_) break;
 
         send_mouse_position();
+        poll_gamepads();
         process_client();
 
         // Actualización descargada y verificada: reemplazar el .exe y reiniciar.

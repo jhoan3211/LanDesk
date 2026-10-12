@@ -2,6 +2,7 @@
 
 // Sockets IPv4 (Winsock) para LAN: TCP con tramas, UDP y utilidades de direcciones.
 
+#include <array>
 #include <atomic>
 #include <cstdint>
 #include <mutex>
@@ -131,6 +132,8 @@ struct LocalAddress {
     std::uint32_t broadcast = 0;
     std::string adapter;
     bool has_gateway = false;  // Adaptador de la LAN real (los virtuales de Hyper-V/WSL no tienen).
+    std::uint32_t mask = 0;
+    std::array<std::uint8_t, 6> mac{};  // Para Wake-on-LAN.
 };
 // IPv4 de los adaptadores activos (excluye loopback), primero los que tienen puerta de enlace.
 [[nodiscard]] std::vector<LocalAddress> local_addresses();

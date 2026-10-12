@@ -85,6 +85,7 @@ struct ClientSettings {
     std::vector<Profile> profiles;
     bool view_only = false;
     bool clipboard_sync = true;
+    bool forward_gamepads = true;  // Mandos XInput de este PC -> mandos virtuales en el host (driver ViGEmBus allí).
     bool relative_mouse = false;
     bool show_stats = false;
     bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).

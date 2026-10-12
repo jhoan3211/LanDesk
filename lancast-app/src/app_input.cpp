@@ -6,6 +6,7 @@
 #include <shellapi.h>
 #include <shellscalingapi.h>
 #include <windowsx.h>
+#include <xinput.h>
 
 #include <algorithm>
 #include <format>
@@ -20,6 +21,8 @@
 #include "lancast/platform/platform.hpp"
 #include "lancast/platform/system.hpp"
 #include "resource.h"
+
+#pragma comment(lib, "xinput.lib")
 
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
@@ -261,6 +264,42 @@ LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
             break;
     }
     return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+void App::poll_gamepads() {
+    if (!session_ || !streaming() || !control_enabled() || !settings_.client.forward_gamepads) {
+        pads_sent_ = {};  // Sesión nueva: se vuelven a anunciar.
+        return;
+    }
+    // Sin foco, los mandos siguen conectados en el host pero en reposo (no quedan botones apretados).
+    const bool focused = GetForegroundWindow() == hwnd_;
+    const std::uint64_t now = gpu::now_us();
+    const bool scan = now - pads_scan_us_ > 2'000'000;
+    if (scan) pads_scan_us_ = now;
+    for (std::uint8_t i = 0; i < pads_sent_.size(); ++i) {
+        proto::GamepadState& sent = pads_sent_[i];
+        proto::GamepadState next;
+        next.index = i;
+        if (!focused) {
+            if (!sent.connected) continue;
+        } else {
+            if (!sent.connected && !scan) continue;  // Hueco vacío: XInput tarda en esos, se revisa cada 2 s.
+            XINPUT_STATE st{};
+            next.connected = XInputGetState(i, &st) == ERROR_SUCCESS;
+            if (next.connected) {
+                next.buttons = st.Gamepad.wButtons;
+                next.left_trigger = st.Gamepad.bLeftTrigger;
+                next.right_trigger = st.Gamepad.bRightTrigger;
+                next.left_x = st.Gamepad.sThumbLX;
+                next.left_y = st.Gamepad.sThumbLY;
+                next.right_x = st.Gamepad.sThumbRX;
+                next.right_y = st.Gamepad.sThumbRY;
+            }
+        }
+        if (next == sent) continue;
+        session_->send_message(proto::encode(proto::MsgType::Gamepad, next));
+        sent = next;
+    }
 }
 
 }  // namespace lancast::app

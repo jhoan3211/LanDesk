@@ -189,7 +189,7 @@ TEST(Protocol, HostInfoSecureDesktopIsOptional) {
     ByteWriter w;
     h.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.pop_back();
+    old_bytes.resize(old_bytes.size() - 1 - 7);  // Sin secure_desktop (1.3) ni MAC/mando (1.7).
     ByteReader r(old_bytes);
     const auto out = HostInfo::read(r);
     ASSERT_TRUE(out.has_value());
@@ -276,4 +276,41 @@ TEST(Protocol, ColorFeaturesAreOptional) {
         EXPECT_EQ(out->pacing_mbps, 0u);
         EXPECT_FALSE(out->adaptive);
     }
+}
+
+TEST(Protocol, GamepadAndWakeOnLanFields) {
+    GamepadState g;
+    g.index = 2;
+    g.buttons = 0x1010;  // A + Start
+    g.left_trigger = 200;
+    g.left_x = -32768;
+    g.right_y = 32767;
+    ByteWriter w;
+    g.write(w);
+    ByteReader r(w.data());
+    const auto back = GamepadState::read(r);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_EQ(back->index, 2);
+    EXPECT_EQ(back->buttons, 0x1010);
+    EXPECT_EQ(back->left_trigger, 200);
+    EXPECT_EQ(back->left_x, -32768);
+    EXPECT_EQ(back->right_y, 32767);
+
+    // HostInfo 1.7: MAC y mando opcionales (un host 1.6 no los envía).
+    HostInfo h;
+    h.host_name = "PC";
+    h.mac = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
+    h.gamepad_available = true;
+    const HostInfo hb = roundtrip(h);
+    EXPECT_EQ(hb.mac, h.mac);
+    EXPECT_TRUE(hb.gamepad_available);
+    ByteWriter hw;
+    h.write(hw);
+    std::vector<std::uint8_t> old = hw.take();
+    old.resize(old.size() - 7);
+    ByteReader hr(old);
+    const auto ho = HostInfo::read(hr);
+    ASSERT_TRUE(ho.has_value());
+    EXPECT_FALSE(ho->gamepad_available);
+    EXPECT_EQ(ho->mac, (std::array<std::uint8_t, 6>{}));
 }
