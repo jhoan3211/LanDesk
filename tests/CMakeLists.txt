@@ -20,7 +20,8 @@ add_executable(lancast-core-tests
     core/settings_test.cpp
     core/audio_resample_test.cpp
     core/json_reader_test.cpp
-    core/fuzz_test.cpp)
+    core/fuzz_test.cpp
+    core/adapt_test.cpp)
 target_link_libraries(lancast-core-tests PRIVATE lancast::core GTest::gtest_main)
 lancast_set_warnings(lancast-core-tests)
 gtest_discover_tests(lancast-core-tests)

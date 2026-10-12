@@ -7,6 +7,7 @@
 #include <cmath>
 #include <format>
 
+#include "lancast/core/adapt.hpp"
 #include "lancast/core/bitrate.hpp"
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
@@ -23,6 +24,11 @@ namespace {
 // Preferencia en modo automático: mejor compresión primero (menos bits = menos paquetes = menos latencia).
 constexpr std::array kAutoOrder{Codec::Hevc, Codec::Av1, Codec::H264};
 
+// Cuadros que pueden esperar en el codificador: más no aumenta el rendimiento, solo la latencia.
+// (Media Foundation a veces retiene un cuadro más antes de entregar el primero.)
+std::size_t max_queued(const mf::Encoder& e) { return e.backend() == "Media Foundation" ? 3 : 2; }
+
+
 // Frame entregado al codificador y aún sin bitstream (se empareja por marca de tiempo).
 struct InFlight {
     std::uint64_t ts = 0;
@@ -32,7 +38,13 @@ struct InFlight {
 
 // Estado compartido con el hilo de Media Foundation que recoge los frames codificados.
 struct EncodeContext {
+    EncodeContext() : output_event(CreateEventW(nullptr, FALSE, FALSE, nullptr)) {}
+    ~EncodeContext() { CloseHandle(output_event); }
+    EncodeContext(const EncodeContext&) = delete;
+    EncodeContext& operator=(const EncodeContext&) = delete;
+
     std::mutex mutex;
+    HANDLE output_event;  // Se activa con cada cuadro terminado (contrapresión).
     std::deque<InFlight> in_flight;
     std::uint16_t epoch = 0;
     std::atomic<int> fec{15};
@@ -190,9 +202,24 @@ void Streamer::run() {
         next->capture = std::move(*cap);
 
         const Size source_size{static_cast<std::uint32_t>(source.width), static_cast<std::uint32_t>(source.height)};
-        const Size stream_size = fit_stream_size(source_size, {cfg.max_width, cfg.max_height});
-        const std::uint32_t fps = std::clamp<std::uint32_t>(cfg.fps, 10, std::max<std::uint32_t>(max_refresh, 30));
+        Size stream_size = fit_stream_size(source_size, {cfg.max_width, cfg.max_height});
+        std::uint32_t fps = std::clamp<std::uint32_t>(cfg.fps, 10, std::max<std::uint32_t>(max_refresh, 30));
         if (fps < cfg.fps) notes += std::format("FPS limitados a {} (frecuencia del monitor). ", fps);
+        if (adapt_scale_ < 0.999) {
+            stream_size = Size{std::max<std::uint32_t>(static_cast<std::uint32_t>(stream_size.width * adapt_scale_) & ~1u, 320),
+                               std::max<std::uint32_t>(static_cast<std::uint32_t>(stream_size.height * adapt_scale_) & ~1u, 240)};
+        }
+        if (adapt_fps_ != 0) fps = std::min(fps, adapt_fps_);
+        std::string reason;
+        {
+            std::scoped_lock lock(mutex_);
+            reason = std::move(adapt_reason_);
+            adapt_reason_.clear();
+        }
+        if (!reason.empty()) {
+            notes += std::format("Ajuste automático: {}; ahora {}x{} @ {} fps. ", reason, stream_size.width,
+                                 stream_size.height, fps);
+        }
 
         // Códec: el pedido si ambos lo soportan; si no, el mejor común.
         const auto encoders = mf::available_encoders(luid);
@@ -279,6 +306,7 @@ void Streamer::run() {
                 send_queue_.push_back(SendJob{std::move(pkt.data), info, ctx->fec.load()});
             }
             send_cv_.notify_one();
+            if (pkt.last_slice) SetEvent(ctx->output_event);
 
             std::scoped_lock lock(mutex_);
             window_bytes_ += bytes;
@@ -297,6 +325,22 @@ void Streamer::run() {
                 stats_.capture_to_encoded_ms = n > 0 ? window_latency_ms_ / n : 0;
                 stats_.capture_wait_ms = n > 0 ? window_wait_ms_ / n : 0;
                 stats_.encode_ms = n > 0 ? window_encode_ms_ / n : 0;
+                const double offered = n + static_cast<double>(window_skipped_);
+                stats_.skipped_percent = offered > 0 ? 100.0 * static_cast<double>(window_skipped_) / offered : 0;
+                // ¿Sobrecarga? El codificador tarda más que el intervalo entre cuadros, o se saltan >10 % de los cuadros.
+                const double interval_ms = static_cast<double>(window_interval_us_) / 1000.0;
+                const bool overloaded = adapt::overloaded(stats_.encode_ms, interval_ms, stats_.skipped_percent, window_frames_);
+                overload_windows_ = overloaded ? overload_windows_ + 1 : 0;
+                if (overload_windows_ >= 2 && encoded_us >= adapt_hold_until_us_) {
+                    overload_windows_ = 0;
+                    adapt_reason_ = stats_.encode_ms > interval_ms
+                                        ? std::format("el codificador tardaba {:.1f} ms por cuadro (hay {:.1f} ms entre cuadros)",
+                                                      stats_.encode_ms, interval_ms)
+                                        : std::format("el codificador no daba abasto ({:.0f} % de cuadros saltados)",
+                                                      stats_.skipped_percent);
+                    adapt_requested_ = true;
+                }
+                window_skipped_ = 0;
                 stats_window_us_ = encoded_us;
                 window_frames_ = 0;
                 window_bytes_ = 0;
@@ -330,6 +374,12 @@ void Streamer::run() {
         }
         log::info("Stream {}: {} {}x{} @ {} fps, {} Mbps, origen ({},{}) {}x{}", epoch, to_string(codec), stream_size.width,
                   stream_size.height, fps, bitrate_kbps / 1000, source.x, source.y, source.width, source.height);
+        {
+            std::scoped_lock lock(mutex_);
+            window_interval_us_ = 1'000'000 / fps;
+            overload_windows_ = 0;
+            adapt_hold_until_us_ = gpu::now_us() + 3'000'000;  // El codificador nuevo necesita calentar.
+        }
         if (callbacks_.started) callbacks_.started(p->info);
         keyframe_requested_ = true;
         dirty = true;
@@ -377,10 +427,47 @@ void Streamer::run() {
                 current_ = p->info;
                 if (callbacks_.started) callbacks_.started(p->info);
             } else {
+                adapt_scale_ = 1.0;  // Nueva configuración del cliente: se vuelve a intentar sin recortes.
+                adapt_fps_ = 0;
+                adapt_requested_ = false;
+                {
+                    std::scoped_lock lock(mutex_);
+                    adapt_reason_.clear();
+                }
                 build(*cfg, decoders, audio_rate, audio_channels, client_slices);
             }
         }
         if (!p) continue;
+
+        // Ajuste automático pedido por las estadísticas.
+        if (adapt_requested_.exchange(false)) {
+            if (!p->config.adaptive) {
+                std::scoped_lock lock(mutex_);
+                adapt_reason_.clear();
+            } else if (const auto step = adapt::next_step(p->stream_size, p->info.fps, adapt_scale_)) {
+                adapt_scale_ = step->scale;
+                if (step->fps != 0) adapt_fps_ = step->fps;
+                std::vector<Codec> decs;
+                bool slices_ok = false;
+                std::uint32_t arate = 0;
+                std::uint8_t achannels = 0;
+                {
+                    std::scoped_lock lock(mutex_);
+                    decs = client_decoders_;
+                    slices_ok = client_slices_;
+                    arate = audio_rate_;
+                    achannels = audio_channels_;
+                    log::warn("Ajuste automático: {}", adapt_reason_);
+                }
+                const proto::StreamConfig same = p->config;
+                build(same, decs, arate, achannels, slices_ok);
+                if (!p) continue;
+            } else {
+                std::scoped_lock lock(mutex_);
+                log::warn("Ajuste automático: ya en el mínimo (720p, 30 fps); {}", adapt_reason_);
+                adapt_reason_.clear();
+            }
+        }
 
         // Esperar un frame nuevo, como mucho hasta el próximo instante de envío.
         const std::uint64_t interval_us = 1'000'000 / p->info.fps;
@@ -439,6 +526,28 @@ void Streamer::run() {
             if (idr) keyframe_requested_ = true;
             Sleep(5);
             continue;
+        }
+
+        // Contrapresión: si el codificador ya tiene cuadros esperando, no se agrega otro a la cola (solo sumaría
+        // latencia). El cuadro queda pendiente y se envía la imagen más reciente cuando haya lugar.
+        if (!idr) {
+            std::size_t queued = 0;
+            {
+                std::scoped_lock lock(p->ctx->mutex);
+                // Entradas viejas = cuadros que el codificador descartó: no deben bloquear.
+                while (!p->ctx->in_flight.empty() && now > p->ctx->in_flight.front().encode_start_us + 250'000) {
+                    p->ctx->in_flight.pop_front();
+                }
+                queued = p->ctx->in_flight.size();
+            }
+            if (queued >= max_queued(*p->encoder)) {
+                if (st == capture::Status::NewFrame) {
+                    std::scoped_lock lock(mutex_);
+                    ++window_skipped_;
+                }
+                WaitForSingleObject(p->ctx->output_event, 2);
+                continue;
+            }
         }
 
         // Momento real en que Windows presentó la imagen que vamos a codificar (si es reciente).

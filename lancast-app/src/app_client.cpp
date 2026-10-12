@@ -102,6 +102,7 @@ proto::StreamConfig App::make_stream_config() const {
     c.low_latency = s.low_latency;
     c.intra_refresh = s.intra_refresh;
     c.slices = s.slices;
+    c.adaptive = s.adaptive;
     return c;
 }
 

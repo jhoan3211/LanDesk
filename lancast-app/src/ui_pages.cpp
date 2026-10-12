@@ -342,6 +342,10 @@ void App::draw_stream_settings(bool live) {
         if (ImGui::Checkbox("Por slices (sub-frame)##sl", &s.slices)) changed = true;
         help("El cuadro se envía en partes a medida que el codificador las termina: la red trabaja en paralelo "
              "con la codificación. Solo si la GPU del host lo soporta.");
+        row("Ajuste automático");
+        if (ImGui::Checkbox("##adaptive", &s.adaptive)) changed = true;
+        help("Si el codificador del host tarda más que el tiempo entre cuadros, baja la resolución (hasta 720p) "
+             "y luego los FPS, para que la latencia no crezca. Se avisa con un mensaje.");
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();
@@ -453,6 +457,9 @@ void App::draw_host_page() {
                         st.stream->height, st.stream->fps, st.stream->bitrate_kbps / 1000, st.encoder_name.c_str());
             ImGui::Text("Enviando %.0f fps · %.1f Mbps · captura+codificación %.1f ms", st.stats.fps, st.stats.bitrate_mbps,
                         st.stats.capture_to_encoded_ms);
+            if (st.stats.skipped_percent >= 1.0) {
+                ImGui::TextColored(kWarn, "El codificador no da abasto: %.0f %% de cuadros saltados", st.stats.skipped_percent);
+            }
         }
         if (danger_button("Desconectar")) host_.disconnect();
         ImGui::SameLine();

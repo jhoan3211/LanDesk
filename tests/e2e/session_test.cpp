@@ -145,8 +145,9 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_TRUE(got_key);
     EXPECT_GE(decoded, 1);  // Con el escritorio quieto el host solo manda frames de mantenimiento.
     const auto hs = host.status().stats;
-    std::printf("  Host: espera de captura %.2f ms, conversión+codificación %.2f ms, %.0f fps\n", hs.capture_wait_ms,
-                hs.encode_ms, hs.fps);
+    std::printf("  Host: espera de captura %.2f ms, conversión+codificación %.2f ms, %.0f fps, %.1f %% saltados\n",
+                hs.capture_wait_ms, hs.encode_ms, hs.fps, hs.skipped_percent);
+    EXPECT_LT(hs.skipped_percent, 10.0) << "A 720p el codificador debe dar abasto";
     const auto stats = client.stats();
     std::printf("  Latencia: codificación %.2f ms, red %.2f ms, total %.2f ms, RTT %.2f ms\n", stats.encode_ms,
                 stats.network_ms, stats.total_ms, stats.rtt_ms);

@@ -47,6 +47,7 @@ struct StreamSettings {
     // decodificadores de Windows, un keyframe recupera antes (descartan cuadros durante la ola de refresco).
     bool intra_refresh = false;
     bool slices = true;         // Envío por slices: la red empieza antes de que termine de codificarse el cuadro.
+    bool adaptive = true;       // El host baja resolución/FPS solo si su codificador no da abasto.
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;
 };

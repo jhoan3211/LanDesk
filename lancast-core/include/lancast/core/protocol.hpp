@@ -177,6 +177,7 @@ struct StreamConfig {
     bool slices = true;               // Opcional (1.3+): envío por slices (sub-frame).
     std::uint8_t stream_index = 0;    // Opcional (1.3+): 0 = principal, 1 = segunda ventana.
     bool enabled = true;              // Opcional (1.3+): false = detener ese stream.
+    bool adaptive = true;             // Opcional (1.4+): bajar resolución/FPS si el codificador no da abasto.
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };

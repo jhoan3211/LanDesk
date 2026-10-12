@@ -70,6 +70,16 @@ private:
     std::atomic<bool> keyframe_requested_{true};
     std::atomic<bool> refresh_requested_{false};
 
+    // Ajuste automático: cuando el codificador no da abasto se reconstruye con menos resolución o FPS.
+    std::atomic<bool> adapt_requested_{false};
+    double adapt_scale_ = 1.0;       // Solo lo usa el hilo de captura.
+    std::uint32_t adapt_fps_ = 0;    // 0 = sin límite.
+    std::string adapt_reason_;
+    int overload_windows_ = 0;       // Ventanas de 1 s seguidas con sobrecarga (protegido por mutex_).
+    std::uint64_t adapt_hold_until_us_ = 0;
+    std::uint64_t window_skipped_ = 0;
+    std::uint64_t window_interval_us_ = 0;
+
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::optional<proto::StreamConfig> pending_;

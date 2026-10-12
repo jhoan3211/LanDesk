@@ -49,6 +49,7 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("low_latency", s.low_latency);
     t.set("intra_refresh", s.intra_refresh);
     t.set("slices", s.slices);
+    t.set("adaptive", s.adaptive);
 }
 
 StreamSettings stream_from_table(const toml::Table& t) {
@@ -77,6 +78,7 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.low_latency = t.get_bool("low_latency").value_or(s.low_latency);
     s.intra_refresh = t.get_bool("intra_refresh").value_or(s.intra_refresh);
     s.slices = t.get_bool("slices").value_or(s.slices);
+    s.adaptive = t.get_bool("adaptive").value_or(s.adaptive);
     return s;
 }
 
