@@ -75,6 +75,24 @@ class Storage(context: Context) : PairingStore {
         get() = prefs.getBoolean("stats", false)
         set(v) = prefs.edit().putBoolean("stats", v).apply()
 
+    var showGraphs: Boolean
+        get() = prefs.getBoolean("graphs", false)
+        set(v) = prefs.edit().putBoolean("graphs", v).apply()
+
+    // Ritmo máximo de envío del PC en Mbps (0 = sin límite). Por Wi-Fi evita ráfagas que el router descarta.
+    var pacingMbps: Int
+        get() = prefs.getInt("pacing", 0)
+        set(v) = prefs.edit().putInt("pacing", v).apply()
+
+    var lastUpdateCheck: Long
+        get() = prefs.getLong("update_check", 0)
+        set(v) = prefs.edit().putLong("update_check", v).apply()
+
+    // MAC de cada PC (por dirección) para despertarlo con Wake-on-LAN.
+    fun mac(address: String): ByteArray? = prefs.getString("mac.$address", null)?.let { WakeOnLan.parseMac(it) }
+
+    fun saveMac(address: String, mac: ByteArray) = prefs.edit().putString("mac.$address", WakeOnLan.format(mac)).apply()
+
     var recent: List<String>
         get() = prefs.getString("recent", "")!!.split('\n').filter { it.isNotBlank() }
         set(v) = prefs.edit().putString("recent", v.distinct().take(6).joinToString("\n")).apply()

@@ -2,7 +2,10 @@ package com.lancast.android
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.graphics.RectF
 import android.net.wifi.WifiManager
 import android.os.Build
@@ -13,6 +16,10 @@ import android.text.InputFilter
 import android.text.InputType
 import android.view.Gravity
 import android.view.HapticFeedbackConstants
+import android.view.InputDevice
+import android.view.KeyEvent
+import android.view.MotionEvent
+import android.view.Surface
 import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
@@ -35,6 +42,9 @@ import com.lancast.core.ClientCaps
 import com.lancast.core.CodecChoice
 import com.lancast.core.CursorPos
 import com.lancast.core.CursorShape
+import com.lancast.core.FileProgress
+import com.lancast.core.FileTransfer
+import com.lancast.core.MouseButtonId
 import com.lancast.core.HostInfo
 import com.lancast.core.Messages
 import com.lancast.core.Session
@@ -58,6 +68,18 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private lateinit var bubble: TextView
     private lateinit var keyboard: KeyboardInput
     private lateinit var touch: TouchController
+
+    private lateinit var graphs: GraphView
+    private lateinit var filesStatus: TextView
+    private var pad: OnScreenPad? = null
+    private lateinit var gamepads: GamepadInput
+    private var files: FileTransfer? = null
+    private var pickingFiles = false  // El selector de archivos tapa la pantalla: la sesión sigue viva.
+    @Volatile private var lastRemoteClipboard: String? = null
+    private var lastSentClipboard: String? = null
+    private var mouseButtons = 0
+    private var stylusButton: MouseButtonId? = null
+    private val decodeHistory = ArrayDeque<Float>()
 
     private val ui = Handler(Looper.getMainLooper())
     private var session: Session? = null
@@ -98,6 +120,12 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onStart() {
         super.onStart()
+        WifiBinding.start(this)
+        if (pickingFiles && session != null) {
+            pickingFiles = false
+            return
+        }
+        pickingFiles = false
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
         @Suppress("DEPRECATION")
         val mode = if (Build.VERSION.SDK_INT >= 29) WifiManager.WIFI_MODE_FULL_LOW_LATENCY else WifiManager.WIFI_MODE_FULL_HIGH_PERF
@@ -110,6 +138,11 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onStop() {
         super.onStop()
+        if (pickingFiles) return
+        gamepads.disconnectAll()
+        pad?.release()
+        files?.close()
+        files = null
         reconnectUntil = 0
         session?.close()
         session = null
@@ -126,7 +159,34 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) {
+            hideSystemBars()
+            ui.postDelayed({ sendClipboard() }, 300)  // Android solo deja leer el portapapeles con la app enfocada.
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- portapapeles
+
+    private fun clipboard() = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+    // Teléfono -> PC: lo copiado en otra app llega al PC al volver a LanCast.
+    private fun sendClipboard() {
+        if (session?.hostInfo?.clipboardAllowed != true) return
+        val text = try {
+            clipboard().primaryClip?.takeIf { it.itemCount > 0 }?.getItemAt(0)?.coerceToText(this)?.toString()
+        } catch (_: Exception) {
+            null
+        } ?: return
+        if (text.isEmpty() || text.length > 1_000_000 || text == lastRemoteClipboard || text == lastSentClipboard) return
+        lastSentClipboard = text
+        send(Messages.clipboard(text))
+    }
+
+    // PC -> teléfono.
+    override fun onClipboard(text: String) {
+        if (session?.hostInfo?.clipboardAllowed != true) return
+        lastRemoteClipboard = text
+        ui.post { runCatching { clipboard().setPrimaryClip(ClipData.newPlainText("LanCast", text)) } }
     }
 
     // ------------------------------------------------------------------------------------------- conexión
@@ -164,6 +224,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             monitorId = monitorId, maxWidth = w, maxHeight = h, fps = if (storage.fps == 0) hz else storage.fps,
             codec = codec, audio = storage.audio,
             autoBitrate = storage.bitrateMbps == 0, bitrateKbps = maxOf(storage.bitrateMbps, 5) * 1000,
+            pacingMbps = storage.pacingMbps,
         )
     }
 
@@ -200,15 +261,117 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onHostInfo(info: HostInfo) = ui.post {
         if (!info.inputAllowed) Toast.makeText(this, "${info.hostName} no permite el control: solo ver", Toast.LENGTH_LONG).show()
+        if (info.hasMac) {
+            storage.saveMac(address, info.mac)
+            session?.hostAddress?.hostAddress?.let { storage.saveMac(it, info.mac) }
+        }
+        sendClipboard()
+        openFiles()
     }.let {}
+
+    // ------------------------------------------------------------------------------------------- archivos
+
+    private fun openFiles() {
+        if (files != null) return
+        val s = session ?: return
+        if (s.hostInfo?.filesAllowed != true) return
+        Thread {
+            val ft = s.openFiles(FileSaver(this)) { p -> ui.post { showFileProgress(p) } }
+            ui.post { if (session === s) files = ft else ft?.close() }
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun showFileProgress(p: FileProgress) {
+        val what = if (p.outgoing) "Enviando" else "Recibiendo"
+        if (p.finished) {
+            filesStatus.visibility = View.GONE
+            val msg = when {
+                p.ok && p.outgoing -> "${p.name} enviado al PC"
+                p.ok -> "${p.name} guardado en ${FileSaver.folderLabel()}"
+                else -> "${p.name}: ${p.message}"
+            }
+            Toast.makeText(this, msg, Toast.LENGTH_LONG).show()
+            return
+        }
+        val pct = if (p.size > 0) (p.done * 100 / p.size).toInt() else 0
+        filesStatus.text = if (p.message.isNotEmpty() && p.done == 0L) "$what ${p.name}: ${p.message}" else "$what ${p.name} · $pct %"
+        filesStatus.visibility = View.VISIBLE
+    }
+
+    private fun pickFiles() {
+        if (session?.hostInfo?.filesAllowed != true) {
+            Toast.makeText(this, "El PC no permite recibir archivos (Ajustes del host)", Toast.LENGTH_LONG).show()
+            return
+        }
+        if (files == null) {
+            openFiles()
+            Toast.makeText(this, "Abriendo el canal de archivos… inténtalo de nuevo en un momento", Toast.LENGTH_SHORT).show()
+            return
+        }
+        pickingFiles = true
+        @Suppress("DEPRECATION")
+        startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+        }, REQUEST_FILES)
+    }
+
+    @Deprecated("API de actividad clásica: suficiente aquí")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_FILES || resultCode != RESULT_OK || data == null) return
+        val ft = files ?: return
+        val uris = buildList {
+            data.clipData?.let { c -> for (i in 0 until c.itemCount) add(c.getItemAt(i).uri) }
+            if (isEmpty()) data.data?.let { add(it) }
+        }
+        for (uri in uris) {
+            var name = "archivo"
+            var size = -1L
+            contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME, android.provider.OpenableColumns.SIZE),
+                null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    name = c.getString(0) ?: name
+                    if (!c.isNull(1)) size = c.getLong(1)
+                }
+            }
+            if (size < 0) {
+                Toast.makeText(this, "$name: no se pudo saber su tamaño", Toast.LENGTH_LONG).show()
+                continue
+            }
+            ft.send(name, size, 0) { contentResolver.openInputStream(uri) ?: throw java.io.IOException("No se pudo abrir") }
+        }
+    }
 
     override fun onStreamStarted(stream: StreamStarted) {
         this.stream = stream
         ui.post {
             monitorId = stream.monitorId.takeIf { it != 0 } ?: monitorId
             surfaceView.holder.setFixedSize(stream.width, stream.height)
+            matchRefreshRate(stream.fps)
             layoutVideo()
             if (stream.notes.isNotBlank()) Toast.makeText(this, stream.notes.trim(), Toast.LENGTH_LONG).show()
+        }
+    }
+
+    // La pantalla a la frecuencia del stream (p. ej. 120 Hz): sin esto, Android puede bajarla a 60 Hz porque cree que
+    // es un video, y los cuadros se ven a saltos.
+    private fun matchRefreshRate(fps: Int) {
+        if (fps <= 0) return
+        if (Build.VERSION.SDK_INT >= 30) {
+            runCatching { surfaceView.holder.surface.setFrameRate(fps.toFloat(), Surface.FRAME_RATE_COMPATIBILITY_FIXED_SOURCE) }
+        }
+        @Suppress("DEPRECATION")
+        val disp = if (Build.VERSION.SDK_INT >= 30) display else windowManager.defaultDisplay
+        val current = disp?.mode ?: return
+        // Mismo tamaño; la frecuencia más baja que sea múltiplo de los FPS (o, si no hay, la más alta).
+        val modes = disp.supportedModes.filter { it.physicalWidth == current.physicalWidth && it.physicalHeight == current.physicalHeight }
+        val best = modes.filter { m -> m.refreshRate >= fps - 1 && Math.round(m.refreshRate) % fps <= 1 }.minByOrNull { it.refreshRate }
+            ?: modes.maxByOrNull { it.refreshRate } ?: return
+        if (window.attributes.preferredDisplayModeId != best.modeId) {
+            window.attributes = window.attributes.apply { preferredDisplayModeId = best.modeId }
         }
     }
 
@@ -278,7 +441,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         touch = TouchController(this, resources.displayMetrics.density)
         touch.touchpad = storage.touchpad
         @Suppress("ClickableViewAccessibility")  // Es un touchpad: los gestos se traducen a clics del PC.
-        cursorView.setOnTouchListener { _, e -> touch.onTouch(e) }
+        cursorView.setOnTouchListener { _, e -> pointerEvent(e) || touch.onTouch(e) }
+        gamepads = GamepadInput { send(it) }
 
         keyboard = KeyboardInput(this) { send(it) }
         root.addView(keyboard, FrameLayout.LayoutParams(1, 1))
@@ -298,6 +462,19 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         root.addView(stats, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.START).apply {
             setMargins(dp(12), dp(12), 0, 0)
         })
+
+        graphs = GraphView(this).apply { visibility = if (storage.showGraphs) View.VISIBLE else View.GONE }
+        root.addView(graphs, FrameLayout.LayoutParams(dp(300), dp(260), Gravity.TOP or Gravity.END).apply {
+            setMargins(0, dp(12), dp(76), 0)
+        })
+
+        filesStatus = text("", 13f).apply {
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+            background = Ui.rounded(0xCC1C1F26.toInt(), dp(10).toFloat())
+            visibility = View.GONE
+        }
+        root.addView(filesStatus, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+            Gravity.BOTTOM or Gravity.START).apply { setMargins(dp(12), 0, 0, dp(12)) })
 
         toolbar = buildToolbar()
         root.addView(toolbar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
@@ -374,6 +551,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             else Toast.makeText(this, "Requiere LanCast instalado como servicio en el PC", Toast.LENGTH_LONG).show()
         })
         add(button("Zoom 1:1") { resetZoom() })
+        add(button("Archivos") { pickFiles() })
+        add(button("Mando") { togglePad() })
         lateinit var bubbleToggle: TextView
         bubbleToggle = button(if (storage.keyboardBubble) "Teclado flotante: sí" else "Teclado flotante: no") {
             storage.keyboardBubble = !storage.keyboardBubble
@@ -384,6 +563,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         add(button("Estadísticas") {
             storage.showStats = !storage.showStats
             stats.visibility = if (storage.showStats) View.VISIBLE else View.GONE
+        })
+        add(button("Gráficos") {
+            storage.showGraphs = !storage.showGraphs
+            graphs.visibility = if (storage.showGraphs) View.VISIBLE else View.GONE
         })
         add(button("Desconectar", danger = true) {
             reconnectUntil = 0
@@ -535,9 +718,15 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private fun chooseQuality() {
         val resolutions = listOf("screen" to "Igual a esta pantalla", "720" to "720p", "1080" to "1080p", "1440" to "1440p")
         val bitrates = listOf(20, 40, 60, 100, 0)
-        val items = resolutions.map { "Resolución: ${it.second}" } + bitrates.map { if (it == 0) "Bitrate: automático" else "Bitrate: $it Mbps" }
+        val pacing = listOf(0, 300, 500)
+        val items = resolutions.map { "Resolución: ${it.second}" } + bitrates.map { if (it == 0) "Bitrate: automático" else "Bitrate: $it Mbps" } +
+            pacing.map { if (it == 0) "Ritmo de envío: sin límite" else "Ritmo de envío: $it Mbps (si hay cortes por Wi-Fi)" }
         AlertDialog.Builder(this).setTitle("Calidad").setItems(items.toTypedArray()) { _, i ->
-            if (i < resolutions.size) storage.resolution = resolutions[i].first else storage.bitrateMbps = bitrates[i - resolutions.size]
+            when {
+                i < resolutions.size -> storage.resolution = resolutions[i].first
+                i < resolutions.size + bitrates.size -> storage.bitrateMbps = bitrates[i - resolutions.size]
+                else -> storage.pacingMbps = pacing[i - resolutions.size - bitrates.size]
+            }
             session?.requestStream(streamConfig())
             Toast.makeText(this, "Aplicando: ${items[i]}", Toast.LENGTH_SHORT).show()
         }.show()
@@ -554,6 +743,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     private val statsTicker = object : Runnable {
         override fun run() {
+            decodeHistory.addLast((decoder?.decodeMs ?: 0.0).toFloat())
+            while (decodeHistory.size > GraphView.SLOTS) decodeHistory.removeFirst()
             if (storage.showStats) {
                 val st = session?.stats
                 val s = stream
@@ -568,7 +759,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
                     append(decoder?.name ?: "")
                 }
             }
-            ui.postDelayed(this, 500)
+            if (storage.showGraphs) graphs.update(session?.history() ?: emptyList(), decodeHistory.toList())
+            ui.postDelayed(this, 250)
         }
     }
 
@@ -717,5 +909,118 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     companion object {
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
+        private const val REQUEST_FILES = 7
+    }
+
+    // ------------------------------------------------------------------------------------------- mando, mouse, S Pen y teclado físico
+
+    private fun togglePad() {
+        val p = pad
+        if (p != null) {
+            p.release()
+            root.removeView(p)
+            pad = null
+            return
+        }
+        if (session?.hostInfo?.gamepadAvailable != true) {
+            AlertDialog.Builder(this).setTitle("Mando")
+                .setMessage("Para usar mandos, el PC necesita el driver gratuito ViGEmBus " +
+                    "(github.com/nefarius/ViGEmBus/releases) y permitir el control. Instálalo en el PC y vuelve a conectar.")
+                .setPositiveButton("Entendido", null).show()
+            return
+        }
+        val v = OnScreenPad(this) { send(it) }
+        root.addView(v, root.indexOfChild(cursorView) + 1,
+            FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        pad = v
+        Toast.makeText(this, "Mando en pantalla: aparece en el PC como un mando de Xbox", Toast.LENGTH_SHORT).show()
+    }
+
+    private fun pointTo(x: Float, y: Float) {
+        val r = videoRect()
+        if (r.width() <= 0 || r.height() <= 0) return
+        val nx = ((x - r.left) / r.width()).coerceIn(0f, 1f)
+        val ny = ((y - r.top) / r.height()).coerceIn(0f, 1f)
+        touch.setCursor(nx, ny)
+        send(Messages.mouseAbs(nx, ny))
+        cursorView.shown = true
+        placeCursor(nx, ny)
+    }
+
+    // Mouse (Bluetooth/USB) y S Pen: el puntero va exactamente donde apunta, como en el PC.
+    private fun pointerEvent(e: MotionEvent): Boolean {
+        val tool = e.getToolType(0)
+        val mouse = tool == MotionEvent.TOOL_TYPE_MOUSE
+        val stylus = tool == MotionEvent.TOOL_TYPE_STYLUS || tool == MotionEvent.TOOL_TYPE_ERASER
+        if (!mouse && !stylus) return false
+        if (e.actionMasked == MotionEvent.ACTION_SCROLL) {
+            val v = e.getAxisValue(MotionEvent.AXIS_VSCROLL)
+            val h = e.getAxisValue(MotionEvent.AXIS_HSCROLL)
+            if (v != 0f) send(Messages.mouseWheel(Math.round(v * 120)))
+            if (h != 0f) send(Messages.mouseWheel(Math.round(h * 120), true))
+            return true
+        }
+        pointTo(e.x, e.y)
+        if (mouse) {
+            // Botones por diferencia de estado (según el teléfono llegan como toque o como evento genérico).
+            val now = e.buttonState
+            val changed = now xor mouseButtons
+            fun button(mask: Int, id: MouseButtonId) {
+                if (changed and mask != 0) send(Messages.mouseButton(id, now and mask != 0))
+            }
+            button(MotionEvent.BUTTON_PRIMARY, MouseButtonId.LEFT)
+            button(MotionEvent.BUTTON_SECONDARY, MouseButtonId.RIGHT)
+            button(MotionEvent.BUTTON_TERTIARY, MouseButtonId.MIDDLE)
+            mouseButtons = now
+        } else {
+            // S Pen: apoyar la punta = clic izquierdo (y arrastrar); con el botón lateral apretado = clic derecho.
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    val b = if (e.buttonState and MotionEvent.BUTTON_STYLUS_PRIMARY != 0) MouseButtonId.RIGHT else MouseButtonId.LEFT
+                    stylusButton = b
+                    send(Messages.mouseButton(b, true))
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> stylusButton?.let {
+                    send(Messages.mouseButton(it, false))
+                    stylusButton = null
+                }
+            }
+        }
+        return true
+    }
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (gamepads.onMotion(event)) return true
+        // Mouse o lápiz moviéndose sin tocar (hover), la rueda y los botones del mouse.
+        if (event.isFromSource(InputDevice.SOURCE_CLASS_POINTER) && ::cursorView.isInitialized) {
+            val loc = IntArray(2)
+            cursorView.getLocationOnScreen(loc)
+            val copy = MotionEvent.obtain(event)
+            copy.setLocation(event.rawX - loc[0], event.rawY - loc[1])
+            val handled = pointerEvent(copy)
+            copy.recycle()
+            if (handled) return true
+        }
+        return super.dispatchGenericMotionEvent(event)
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (::gamepads.isInitialized && gamepads.onKey(event)) return true
+        // El clic derecho de un mouse llega como "atrás": no debe cerrar el stream.
+        if (event.keyCode == KeyEvent.KEYCODE_BACK && event.isFromSource(InputDevice.SOURCE_MOUSE)) return true
+        // Teclado físico: cada tecla con pulsar y soltar (atajos, juegos, Ctrl+Alt...).
+        val dev = event.device
+        if (dev != null && !dev.isVirtual && dev.keyboardType == InputDevice.KEYBOARD_TYPE_ALPHABETIC && !event.isSystem &&
+            session?.hostInfo?.inputAllowed == true) {
+            val k = Scancodes.forHardware(event.keyCode)
+            if (k != null) {
+                when (event.action) {
+                    KeyEvent.ACTION_DOWN -> send(Messages.key(k.code, k.extended, true))
+                    KeyEvent.ACTION_UP -> send(Messages.key(k.code, k.extended, false))
+                }
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
     }
 }

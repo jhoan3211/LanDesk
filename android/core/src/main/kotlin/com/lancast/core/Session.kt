@@ -107,7 +107,8 @@ class Session(
     private var fileRxKey = ByteArray(0)
     private var sessionId = ByteArray(16)
     private val history = ArrayDeque<StatSample>()
-    private var hostAddress: InetAddress? = null
+    @Volatile var hostAddress: InetAddress? = null
+        private set
 
     // Medios (solo el hilo de medios).
     private val assembler = FrameAssembler()

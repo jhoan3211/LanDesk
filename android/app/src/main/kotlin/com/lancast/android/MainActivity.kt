@@ -15,6 +15,7 @@ import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
+import android.widget.Toast
 import com.lancast.android.Ui.button
 import com.lancast.android.Ui.column
 import com.lancast.android.Ui.dp
@@ -32,6 +33,7 @@ class MainActivity : Activity() {
     private lateinit var pairedBox: LinearLayout
     private lateinit var scanStatus: TextView
     private lateinit var nameLabel: TextView
+    private lateinit var updateBox: LinearLayout
     private val ui = Handler(Looper.getMainLooper())
     @Volatile private var scanning = false
     @Volatile private var scanGeneration = 0
@@ -40,7 +42,58 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         storage = Storage(this)
+        WifiBinding.start(this)
         setContentView(build())
+        checkUpdate()
+    }
+
+    // ------------------------------------------------------------------------------------------- actualización
+
+    private fun checkUpdate() {
+        val now = System.currentTimeMillis()
+        if (now - storage.lastUpdateCheck < 6 * 3600_000L) return
+        thread(name = "lancast-update", isDaemon = true) {
+            val release = try {
+                Updater.check(this)
+            } catch (_: Exception) {
+                return@thread  // Sin internet: se intenta en otro momento.
+            }
+            storage.lastUpdateCheck = now
+            if (release != null) ui.post { showUpdate(release) }
+        }
+    }
+
+    private fun showUpdate(release: Updater.Release) {
+        updateBox.removeAllViews()
+        updateBox.addView(card("Nueva versión ${release.version}", "Tienes la ${Updater.currentVersion(this)}. La descarga se verifica con SHA-256.",
+            "Actualizar", { installUpdate(release) }, null))
+    }
+
+    private fun installUpdate(release: Updater.Release) {
+        if (!Updater.canInstall(this)) {
+            AlertDialog.Builder(this).setTitle("Permitir actualizaciones")
+                .setMessage("Android pide permitir que LanCast instale su propia actualización. Activa \"Permitir de esta fuente\" y vuelve.")
+                .setPositiveButton("Abrir ajustes") { _, _ -> Updater.openInstallPermission(this) }
+                .setNegativeButton("Cancelar", null).show()
+            return
+        }
+        val status = text("Descargando…", 14f)
+        val dialog = AlertDialog.Builder(this).setTitle("LanCast ${release.version}").setView(column(20).apply { addView(status) })
+            .setCancelable(false).show()
+        thread(name = "lancast-update-download", isDaemon = true) {
+            try {
+                val apk = Updater.download(this, release) { pct -> ui.post { status.text = "Descargando… $pct %" } }
+                ui.post {
+                    dialog.dismiss()
+                    Updater.install(this, apk) { err -> ui.post { Toast.makeText(this, err, Toast.LENGTH_LONG).show() } }
+                }
+            } catch (e: Exception) {
+                ui.post {
+                    dialog.dismiss()
+                    Toast.makeText(this, "No se pudo actualizar: ${e.message ?: e.javaClass.simpleName}", Toast.LENGTH_LONG).show()
+                }
+            }
+        }
     }
 
     override fun onResume() {
@@ -62,6 +115,8 @@ class MainActivity : Activity() {
         nameLabel = text("", 14f, Ui.MUTED)
         col.addView(nameLabel)
         updateName()
+        updateBox = column()
+        col.addView(updateBox)
 
         col.addView(section("Equipos en la red"))
         scanStatus = text("Buscando PC con LanCast…", 13f, Ui.MUTED)
@@ -114,7 +169,9 @@ class MainActivity : Activity() {
         col.addView(text(
             "Necesitas LanCast 1.5 o superior en el PC y estar en la misma red. La primera vez el PC muestra un PIN de 6 dígitos.\n\n" +
                 "Gestos: un dedo mueve el cursor · toque = clic · dos dedos = clic derecho / rueda · pellizcar = zoom · " +
-                "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.",
+                "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.\n\n" +
+                "También funcionan el S Pen, un mouse o teclado Bluetooth y los mandos (en el PC aparecen como mando de Xbox; " +
+                "requiere el driver ViGEmBus en el PC). Para despertar un PC dormido, toca ⋯ en Equipos emparejados.",
             12f, Ui.MUTED).apply { margins(top = dp(20)) })
 
         return ScrollView(this).apply {
@@ -206,13 +263,31 @@ class MainActivity : Activity() {
         val paired = storage.paired()
         if (paired.isEmpty()) pairedBox.addView(text("Ninguno todavía.", 13f, Ui.MUTED))
         for (p in paired) {
-            pairedBox.addView(card(p.name, p.address, "Olvidar", {
-                AlertDialog.Builder(this).setMessage("¿Olvidar ${p.name}? La próxima vez pedirá PIN.")
-                    .setPositiveButton("Olvidar") { _, _ ->
-                        storage.forget(p.id)
-                        refreshPaired()
-                    }.setNegativeButton("Cancelar", null).show()
+            val mac = storage.mac(p.address)
+            pairedBox.addView(card(p.name, p.address, "⋯", {
+                val actions = buildList {
+                    if (mac != null) add("Despertar (Wake-on-LAN)" to { wake(p.name, p.address, mac) })
+                    add("Olvidar" to {
+                        AlertDialog.Builder(this@MainActivity).setMessage("¿Olvidar ${p.name}? La próxima vez pedirá PIN.")
+                            .setPositiveButton("Olvidar") { _, _ ->
+                                storage.forget(p.id)
+                                refreshPaired()
+                            }.setNegativeButton("Cancelar", null).show()
+                    })
+                }
+                AlertDialog.Builder(this).setTitle(p.name).setItems(actions.map { it.first }.toTypedArray()) { _, i -> actions[i].second() }.show()
             }) { if (p.address.isNotBlank()) open(p.address, Proto.DEFAULT_CONTROL_PORT) })
+        }
+    }
+
+    // Enciende un PC suspendido o apagado (necesita Wake-on-LAN activado en la BIOS y en la tarjeta de red).
+    private fun wake(name: String, address: String, mac: ByteArray) {
+        thread(name = "lancast-wol", isDaemon = true) {
+            val ok = runCatching { WakeOnLan.send(mac, address) }.isSuccess
+            ui.post {
+                Toast.makeText(this, if (ok) "Despertando $name… suele tardar 10-30 s en aparecer" else "No se pudo enviar el aviso",
+                    Toast.LENGTH_LONG).show()
+            }
         }
     }
 
