@@ -14,7 +14,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
-// Cliente de LanCast (port de lancast-client/client_session.cpp, sin la segunda ventana ni archivos).
+// Cliente de LanCast (port de lancast-client/client_session.cpp, sin la segunda ventana).
 
 // Emparejamientos guardados: secreto de 32 bytes por id del host (hex).
 interface PairingStore {
@@ -50,6 +50,18 @@ interface SessionListener {
     fun onMessage(text: String) {}
     fun onClosed(reason: String, retryable: Boolean) {}
 }
+
+// Una ventana de 250 ms, para los gráficos en tiempo real.
+data class StatSample(
+    val timeUs: Long,
+    val fps: Float,
+    val mbps: Float,
+    val networkMs: Float,     // Promedio de la ventana.
+    val networkMaxMs: Float,  // Peor cuadro de la ventana (los picos).
+    val lost: Int,            // Cuadros perdidos en la ventana.
+    val recovered: Int,       // Cuadros reparados con FEC.
+    val rttMs: Float,
+)
 
 data class SessionStats(
     val rttMs: Double = 0.0,
@@ -91,6 +103,10 @@ class Session(
     private var mediaThread: Thread? = null
     private var mediaRxKey = ByteArray(0)
     private var mediaTxKey = ByteArray(0)
+    private var fileTxKey = ByteArray(0)
+    private var fileRxKey = ByteArray(0)
+    private var sessionId = ByteArray(16)
+    private val history = ArrayDeque<StatSample>()
     private var hostAddress: InetAddress? = null
 
     // Medios (solo el hilo de medios).
@@ -144,6 +160,18 @@ class Session(
     }
 
     fun requestStream(config: StreamConfig) = send(config.encode())
+
+    // Últimos 30 s en ventanas de 250 ms (copia).
+    fun history(): List<StatSample> = synchronized(history) { history.toList() }
+
+    // Canal de archivos con el PC (bloquea: llamar fuera del hilo de la interfaz). null si el PC no lo permite.
+    fun openFiles(sink: FileSink, onProgress: (FileProgress) -> Unit): FileTransfer? {
+        val info = hostInfo ?: return null
+        val host = hostAddress ?: return null
+        if (!info.filesAllowed || info.filePort == 0 || stopping.get()) return null
+        val ft = FileTransfer(sessionId, fileTxKey, fileRxKey, sink, onProgress)
+        return if (ft.connect(host, info.filePort)) ft else null
+    }
 
     fun requestKeyframe(reason: Int = 0) {
         val now = nowUs()
@@ -266,6 +294,9 @@ class Session(
         if (pinRequired) pairing.save(hostId, ack.deviceName, sock.inetAddress.hostAddress ?: "", keys.pairingSecret)
         mediaRxKey = keys.mediaH2c
         mediaTxKey = keys.mediaC2h
+        fileTxKey = keys.fileC2h
+        fileRxKey = keys.fileH2c
+        sessionId = result.sessionId
         val cipher = AesGcm(keys.controlC2h)
         senderThread = Thread({ senderLoop(cipher, output!!) }, "lancast-send").apply {
             isDaemon = true
@@ -345,6 +376,14 @@ class Session(
         var windowFrames = 0
         var windowBytes = 0L
         var windowNetUs = 0L
+        // Ventanas cortas para los gráficos.
+        var gStart = nowUs()
+        var gFrames = 0
+        var gBytes = 0L
+        var gNetUs = 0L
+        var gNetMaxUs = 0L
+        var gLost = assembler.framesLost
+        var gRecovered = assembler.framesRecovered
 
         while (!stopping.get()) {
             val now = nowUs()
@@ -378,6 +417,25 @@ class Session(
                 windowBytes = 0
                 windowNetUs = 0
             }
+            if (now - gStart >= 250_000) {
+                val secs = (now - gStart) / 1e6
+                val sample = StatSample(
+                    now, (gFrames / secs).toFloat(), (gBytes * 8 / secs / 1e6).toFloat(),
+                    if (gFrames > 0) gNetUs / 1000f / gFrames else 0f, gNetMaxUs / 1000f,
+                    (assembler.framesLost - gLost).toInt(), (assembler.framesRecovered - gRecovered).toInt(), stats.rttMs.toFloat(),
+                )
+                synchronized(history) {
+                    history.addLast(sample)
+                    while (history.size > 120) history.removeFirst()
+                }
+                gStart = now
+                gFrames = 0
+                gBytes = 0
+                gNetUs = 0
+                gNetMaxUs = 0
+                gLost = assembler.framesLost
+                gRecovered = assembler.framesRecovered
+            }
 
             try {
                 packet.setData(buf, 0, buf.size)
@@ -391,6 +449,7 @@ class Session(
             val n = packet.length
             if (n < MediaConst.PACKET_HEADER_SIZE + MediaConst.TAG_SIZE || packet.address != host) continue
             windowBytes += n
+            gBytes += n
             val header = buf.copyOf(MediaConst.PACKET_HEADER_SIZE)
             val payload = rx.decrypt(header, header, buf, MediaConst.PACKET_HEADER_SIZE, n - MediaConst.PACKET_HEADER_SIZE) ?: continue
             when (header[0].toInt()) {
@@ -399,8 +458,13 @@ class Session(
                     if (frame != null) {
                         val arrival = nowUs()
                         windowFrames++
-                        if (hasClock) windowNetUs += (arrival + clockOffsetUs - frame.info.captureTimeUs - frame.info.encodeTimeUs)
-                            .coerceIn(0, 1_000_000)
+                        gFrames++
+                        if (hasClock) {
+                            val net = (arrival + clockOffsetUs - frame.info.captureTimeUs - frame.info.encodeTimeUs).coerceIn(0, 1_000_000)
+                            windowNetUs += net
+                            gNetUs += net
+                            if (net > gNetMaxUs) gNetMaxUs = net
+                        }
                         listener.onVideoFrame(frame, arrival)
                     }
                     watchdog()

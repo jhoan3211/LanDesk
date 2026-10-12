@@ -39,6 +39,15 @@ object MsgType {
     const val STREAM_STOPPED = 33
     const val SECURE_ATTENTION = 34
     const val TEXT = 35
+    const val GAMEPAD = 36
+    const val FILE_HELLO = 40
+    const val FILE_OFFER = 41
+    const val FILE_ACCEPT = 42
+    const val FILE_REJECT = 43
+    const val FILE_CHUNK = 44
+    const val FILE_DONE = 45
+    const val FILE_RESULT = 46
+    const val FILE_CANCEL = 47
 }
 
 enum class Codec(val id: Int, val label: String) {
@@ -137,7 +146,11 @@ data class HostInfo(
     val mediaPort: Int,
     val filePort: Int,
     val secureDesktop: Boolean,
+    val mac: ByteArray = ByteArray(6),       // 1.7+: MAC del PC para Wake-on-LAN (ceros = no se sabe).
+    val gamepadAvailable: Boolean = false,   // 1.7+: el PC tiene el driver de mandos virtuales (ViGEmBus).
 ) {
+    val hasMac: Boolean get() = mac.any { it.toInt() != 0 }
+
     companion object {
         fun read(r: ByteReader): HostInfo? {
             val name = r.str(256)
@@ -161,7 +174,14 @@ data class HostInfo(
             val mediaPort = r.u16()
             val filePort = r.u16()
             val secure = if (r.remaining >= 1) r.bool() else false
-            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure) else null
+            var mac = ByteArray(6)
+            var gamepad = false
+            if (r.remaining >= 7) {
+                mac = r.raw(6)
+                gamepad = r.bool()
+            }
+            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad)
+            else null
         }
     }
 }
@@ -191,6 +211,7 @@ data class StreamConfig(
     val lowLatency: Boolean = true,
     val slices: Boolean = true,
     val adaptive: Boolean = true,
+    val pacingMbps: Int = 0,  // 1.7+: ritmo máximo de envío del host (0 = sin límite); ayuda por Wi-Fi.
 ) {
     fun encode(): ByteArray = encode(MsgType.STREAM_CONFIG) { w ->
         w.u32(monitorId).u32(maxWidth).u32(maxHeight).u32(fps).u8(codec.id).bool(autoBitrate)
@@ -200,6 +221,7 @@ data class StreamConfig(
         w.bool(false /* intra-refresh */).bool(slices)
         w.u8(0 /* stream principal */).bool(true /* activo */)
         w.bool(adaptive)
+        w.u32(pacingMbps)
     }
 }
 
@@ -287,6 +309,37 @@ data class CursorShape(val type: Int, val width: Int, val height: Int, val pitch
     }
 }
 
+// Mando en formato XInput: botones XUSB (A = 0x1000...), gatillos 0..255, ejes -32768..32767.
+data class GamepadState(
+    val index: Int = 0,
+    val connected: Boolean = true,
+    val buttons: Int = 0,
+    val leftTrigger: Int = 0,
+    val rightTrigger: Int = 0,
+    val leftX: Int = 0,
+    val leftY: Int = 0,
+    val rightX: Int = 0,
+    val rightY: Int = 0,
+) {
+    companion object {
+        const val DPAD_UP = 0x0001
+        const val DPAD_DOWN = 0x0002
+        const val DPAD_LEFT = 0x0004
+        const val DPAD_RIGHT = 0x0008
+        const val START = 0x0010
+        const val BACK = 0x0020
+        const val LEFT_THUMB = 0x0040
+        const val RIGHT_THUMB = 0x0080
+        const val LEFT_SHOULDER = 0x0100
+        const val RIGHT_SHOULDER = 0x0200
+        const val GUIDE = 0x0400
+        const val A = 0x1000
+        const val B = 0x2000
+        const val X = 0x4000
+        const val Y = 0x8000
+    }
+}
+
 data class DiscoveredHost(val name: String, val deviceId: String, val address: String, val controlPort: Int, val busy: Boolean)
 
 object Messages {
@@ -299,6 +352,10 @@ object Messages {
     fun text(text: String) = encode(MsgType.TEXT) { it.str(text) }
     fun clipboard(text: String) = encode(MsgType.CLIPBOARD) { it.str(text) }
     fun releaseAll() = encode(MsgType.RELEASE_ALL)
+    fun gamepad(p: GamepadState) = encode(MsgType.GAMEPAD) { w ->
+        w.u8(p.index).bool(p.connected).u16(p.buttons).u8(p.leftTrigger).u8(p.rightTrigger)
+        w.u16(p.leftX and 0xFFFF).u16(p.leftY and 0xFFFF).u16(p.rightX and 0xFFFF).u16(p.rightY and 0xFFFF)
+    }
     fun secureAttention() = encode(MsgType.SECURE_ATTENTION)
     fun disconnect() = encode(MsgType.DISCONNECT)
     // [15][motivo: 0 = keyframe, 1 = pérdida][stream]
