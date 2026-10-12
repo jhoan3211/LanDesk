@@ -102,6 +102,8 @@ class MainActivity : Activity() {
             { storage.resolution }, { storage.resolution = it }))
         col.addView(option("FPS", listOf("0" to "Igual a esta pantalla", "30" to "30", "60" to "60", "90" to "90", "120" to "120"),
             { storage.fps.toString() }, { storage.fps = it.toInt() }))
+        col.addView(option("Bitrate (Wi-Fi)", listOf("40" to "40 Mbps", "60" to "60 Mbps", "100" to "100 Mbps", "0" to "Automático", "20" to "20 Mbps"),
+            { storage.bitrateMbps.toString() }, { storage.bitrateMbps = it.toInt() }))
         col.addView(option("Códec", listOf("auto" to "Automático", "hevc" to "HEVC", "h264" to "H.264", "av1" to "AV1"),
             { storage.codec }, { storage.codec = it }))
         col.addView(option("Audio del PC", listOf("true" to "Sí", "false" to "No"), { storage.audio.toString() }, { storage.audio = it == "true" }))

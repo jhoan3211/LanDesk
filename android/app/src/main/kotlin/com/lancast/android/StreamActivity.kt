@@ -161,6 +161,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         return StreamConfig(
             monitorId = monitorId, maxWidth = w, maxHeight = h, fps = if (storage.fps == 0) hz else storage.fps,
             codec = codec, audio = storage.audio,
+            autoBitrate = storage.bitrateMbps == 0, bitrateKbps = maxOf(storage.bitrateMbps, 5) * 1000,
         )
     }
 
@@ -450,10 +451,12 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     private fun chooseQuality() {
         val resolutions = listOf("screen" to "Igual a esta pantalla", "720" to "720p", "1080" to "1080p", "1440" to "1440p")
-        AlertDialog.Builder(this).setTitle("Resolución").setItems(resolutions.map { it.second }.toTypedArray()) { _, i ->
-            storage.resolution = resolutions[i].first
+        val bitrates = listOf(20, 40, 60, 100, 0)
+        val items = resolutions.map { "Resolución: ${it.second}" } + bitrates.map { if (it == 0) "Bitrate: automático" else "Bitrate: $it Mbps" }
+        AlertDialog.Builder(this).setTitle("Calidad").setItems(items.toTypedArray()) { _, i ->
+            if (i < resolutions.size) storage.resolution = resolutions[i].first else storage.bitrateMbps = bitrates[i - resolutions.size]
             session?.requestStream(streamConfig())
-            Toast.makeText(this, "Aplicando ${resolutions[i].second}…", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Aplicando: ${items[i]}", Toast.LENGTH_SHORT).show()
         }.show()
     }
 

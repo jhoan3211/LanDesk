@@ -44,6 +44,12 @@ class Storage(context: Context) : PairingStore {
         get() = prefs.getInt("fps", 0)
         set(v) = prefs.edit().putInt("fps", v).apply()
 
+    // Bitrate fijo en Mbps (0 = automático del host). Por Wi-Fi conviene limitarlo: el automático para 1440p a
+    // 120 fps pasa de 150 Mbps y las ráfagas llenan los búferes del router y del Wi-Fi (pérdidas y cortes).
+    var bitrateMbps: Int
+        get() = prefs.getInt("bitrate", 40)
+        set(v) = prefs.edit().putInt("bitrate", v).apply()
+
     var codec: String  // "auto", "h264", "hevc", "av1"
         get() = prefs.getString("codec", "auto")!!
         set(v) = prefs.edit().putString("codec", v).apply()
