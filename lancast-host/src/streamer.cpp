@@ -13,6 +13,7 @@
 #include "lancast/core/log.hpp"
 #include "lancast/core/media.hpp"
 #include "lancast/platform/capture.hpp"
+#include "lancast/platform/color.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/platform.hpp"
 #include "lancast/platform/system.hpp"
@@ -57,6 +58,7 @@ struct Pipeline {
     gpu::Device device;
     std::unique_ptr<capture::DesktopCapture> capture;
     std::unique_ptr<gpu::VideoProcessor> vp;
+    std::unique_ptr<gpu::YuvPacker> packer;  // 4:4:4 empaquetado o HDR (en vez del procesador de video).
     // Varias texturas: mientras el codificador lee una, la captura escribe la siguiente (en paralelo).
     std::array<gpu::ComPtr<ID3D11Texture2D>, 5> nv12;
     std::size_t nv12_index = 0;
@@ -91,12 +93,11 @@ void Streamer::stop() {
     if (send_thread_.joinable()) send_thread_.join();
 }
 
-void Streamer::configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
-                         std::uint32_t audio_rate, std::uint8_t audio_channels, bool client_slices) {
+void Streamer::configure(const proto::StreamConfig& config, const proto::ClientCaps& client, std::uint32_t audio_rate,
+                         std::uint8_t audio_channels) {
     std::scoped_lock lock(mutex_);
     pending_ = config;
-    client_decoders_ = client_decoders;
-    client_slices_ = client_slices;
+    client_ = client;
     audio_rate_ = audio_rate;
     audio_channels_ = audio_channels;
     cv_.notify_all();
@@ -148,8 +149,10 @@ void Streamer::run() {
         p.reset();
     };
 
-    auto build = [&](const proto::StreamConfig& cfg, const std::vector<Codec>& decoders, std::uint32_t audio_rate,
-                     std::uint8_t audio_channels, bool client_slices) {
+    auto build = [&](const proto::StreamConfig& cfg, const proto::ClientCaps& client, std::uint32_t audio_rate,
+                     std::uint8_t audio_channels) {
+        const std::vector<Codec>& decoders = client.decoders;
+        const bool client_slices = client.supports_slices;
         auto gpus = platform::enumerate_gpus();
         if (!gpus) return fail(gpus.error().message());
         auto monitors = platform::enumerate_monitors(*gpus);
@@ -186,6 +189,28 @@ void Streamer::run() {
             }
         }
 
+        // 4:4:4 y HDR: los pide el cliente y deben poder ambos lados.
+        bool want_444 = cfg.chroma_444;
+        bool want_hdr = cfg.hdr;
+        if (want_444 && !client.supports_444) {
+            notes += "El cliente no admite 4:4:4 (actualízalo a LanCast 1.4): se usa 4:2:0. ";
+            want_444 = false;
+        }
+        if (want_hdr && !client.supports_hdr) {
+            notes += "El cliente no puede decodificar HDR (necesita HEVC o AV1 de 10 bits): se usa SDR. ";
+            want_hdr = false;
+        }
+        if (want_hdr) {
+            bool all_hdr = !rects.empty();
+            for (const auto& m : *monitors) {
+                if (std::ranges::find(rects, m.desktop) != rects.end() && !m.hdr_enabled) all_hdr = false;
+            }
+            if (!all_hdr) {
+                notes += "El monitor del host no está en modo HDR (Configuración → Pantalla → Usar HDR): se usa SDR. ";
+                want_hdr = false;
+            }
+        }
+
         auto next = std::make_unique<Pipeline>();
         if (p && p->luid == luid) {
             next->device = p->device;  // Reutilizar el dispositivo D3D11.
@@ -197,9 +222,25 @@ void Streamer::run() {
         next->luid = luid;
         p.reset();  // Liberar la duplicación anterior antes de crear la nueva.
 
-        auto cap = capture::DesktopCapture::create(next->device, rects, source);
+        auto cap = capture::DesktopCapture::create(next->device, rects, source, want_hdr);
+        if (!cap && want_hdr) {
+            notes += std::format("No se pudo capturar en HDR ({}): se usa SDR. ", cap.error().message());
+            want_hdr = false;
+            cap = capture::DesktopCapture::create(next->device, rects, source, false);
+        }
         if (!cap) return fail(cap.error().message());
         next->capture = std::move(*cap);
+        if ((want_444 || want_hdr) && next->capture->rotation() != 0) {
+            notes += "Con el monitor girado no hay 4:4:4 ni HDR: se usa 4:2:0 SDR. ";
+            want_444 = false;
+            if (want_hdr) {
+                want_hdr = false;
+                next->capture.reset();  // Windows no permite duplicar dos veces la misma pantalla.
+                auto sdr = capture::DesktopCapture::create(next->device, rects, source, false);
+                if (!sdr) return fail(sdr.error().message());
+                next->capture = std::move(*sdr);
+            }
+        }
 
         const Size source_size{static_cast<std::uint32_t>(source.width), static_cast<std::uint32_t>(source.height)};
         Size stream_size = fit_stream_size(source_size, {cfg.max_width, cfg.max_height});
@@ -239,39 +280,84 @@ void Streamer::run() {
             if (both(c) && std::ranges::find(order, c) == order.end()) order.push_back(c);
         }
         if (order.empty()) return fail("No hay un códec en común (el host no codifica lo que el cliente decodifica)");
-        if (cfg.chroma_444) notes += "4:4:4 no está disponible con este codificador: se usa 4:2:0. ";
-        if (cfg.hdr) notes += "HDR de 10 bits no está disponible con este codificador: se usa SDR de 8 bits. ";
+        stream_size = Size{stream_size.width & ~1u, stream_size.height & ~1u};
 
-        auto vp = gpu::VideoProcessor::create(next->device, next->capture->texture_size(), stream_size,
-                                              gpu::ColorConversion::RgbToYuv709);
-        if (!vp) return fail(vp.error().message());
-        next->vp = std::move(*vp);
-        for (auto& t : next->nv12) {
-            auto tex = gpu::create_texture(next->device.device.Get(), stream_size.width, stream_size.height, DXGI_FORMAT_NV12,
-                                           D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-            if (!tex) return fail(tex.error().message());
-            t = *tex;
-        }
+        // Intentos en orden: lo pedido, sin HDR, y por último 4:2:0 SDR (siempre disponible).
+        struct Attempt {
+            bool chroma_444;
+            bool hdr;
+        };
+        std::vector<Attempt> attempts{{want_444, want_hdr}};
+        if (want_hdr) attempts.push_back({want_444, false});
+        if (want_444) attempts.push_back({false, false});
 
         Codec codec = order.front();
         std::uint32_t bitrate_kbps = 0;
-        for (const Codec c : order) {
-            bitrate_kbps = cfg.auto_bitrate ? auto_bitrate_mbps(stream_size.width, stream_size.height, fps, c) * 1000
-                                            : std::clamp<std::uint32_t>(cfg.bitrate_kbps, kMinBitrateMbps * 1000,
-                                                                        kMaxBitrateMbps * 1000);
-            mf::EncoderConfig ec{c, stream_size, fps, bitrate_kbps, cfg.rate_control, cfg.low_latency};
-            ec.direct = true;
-            ec.intra_refresh = cfg.intra_refresh;
-            ec.slices = cfg.slices && client_slices;
-            auto enc = mf::create_encoder(next->device, ec);
-            if (enc) {
-                next->encoder = std::move(*enc);
-                codec = c;
+        Attempt used{false, false};
+        for (const Attempt& at : attempts) {
+            if (!at.hdr && next->capture->format() != DXGI_FORMAT_B8G8R8A8_UNORM) {
+                next->capture.reset();
+                auto sdr = capture::DesktopCapture::create(next->device, rects, source, false);  // Volver a 8 bits.
+                if (!sdr) return fail(sdr.error().message());
+                next->capture = std::move(*sdr);
+            }
+            const Size coded = gpu::coded_size(stream_size, at.chroma_444);
+            const DXGI_FORMAT tex_format = at.hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
+            next->vp.reset();
+            next->packer.reset();
+            if (at.chroma_444 || at.hdr) {
+                gpu::PackConfig pc{next->capture->texture_size(), next->capture->format(), stream_size, at.chroma_444, at.hdr};
+                auto packer = gpu::YuvPacker::create(next->device, pc);
+                if (!packer) {
+                    log::warn("Conversión por shader no disponible: {}", packer.error().message());
+                    continue;
+                }
+                next->packer = std::move(*packer);
+            } else {
+                auto vp = gpu::VideoProcessor::create(next->device, next->capture->texture_size(), stream_size,
+                                                      gpu::ColorConversion::RgbToYuv709);
+                if (!vp) return fail(vp.error().message());
+                next->vp = std::move(*vp);
+            }
+            bool textures_ok = true;
+            for (auto& t : next->nv12) {
+                auto tex = gpu::create_texture(next->device.device.Get(), coded.width, coded.height, tex_format,
+                                               D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+                if (!tex) {
+                    textures_ok = false;
+                    break;
+                }
+                t = *tex;
+            }
+            if (!textures_ok) continue;
+
+            for (const Codec c : order) {
+                if (at.hdr && c == Codec::H264) continue;  // H.264 no tiene 10 bits por hardware.
+                bitrate_kbps = cfg.auto_bitrate ? auto_bitrate_mbps(coded.width, coded.height, fps, c) * 1000
+                                                : std::clamp<std::uint32_t>(cfg.bitrate_kbps, kMinBitrateMbps * 1000,
+                                                                            kMaxBitrateMbps * 1000);
+                mf::EncoderConfig ec{c, coded, fps, bitrate_kbps, cfg.rate_control, cfg.low_latency};
+                ec.direct = true;
+                ec.intra_refresh = cfg.intra_refresh;
+                ec.slices = cfg.slices && client_slices;
+                ec.ten_bit = at.hdr;
+                auto enc = mf::create_encoder(next->device, ec);
+                if (enc) {
+                    next->encoder = std::move(*enc);
+                    codec = c;
+                    break;
+                }
+                log::warn("No se pudo crear el codificador {}{}{}: {}", to_string(c), at.chroma_444 ? " 4:4:4" : "",
+                          at.hdr ? " HDR" : "", enc.error().message());
+            }
+            if (next->encoder) {
+                used = at;
                 break;
             }
-            log::warn("No se pudo crear el codificador {}: {}", to_string(c), enc.error().message());
         }
         if (!next->encoder) return fail("No se pudo iniciar ningún codificador por hardware");
+        if (want_hdr && !used.hdr) notes += "El codificador de esta GPU no admite HDR de 10 bits: se usa SDR. ";
+        if (want_444 && !used.chroma_444) notes += "El codificador no acepta el cuadro 4:4:4 a esta resolución: se usa 4:2:0. ";
 
         ++epoch;
         next->ctx = std::make_shared<EncodeContext>();
@@ -366,14 +452,17 @@ void Streamer::run() {
         next->info.slices = next->encoder->slices_active();
         next->info.encoder_backend = next->encoder->backend();
         next->info.stream_index = stream_index_;
+        next->info.chroma_444 = used.chroma_444;
+        next->info.hdr = used.hdr;
         p = std::move(next);
         {
             std::scoped_lock lock(mutex_);
             current_ = p->info;
             encoder_name_ = p->encoder->name();
         }
-        log::info("Stream {}: {} {}x{} @ {} fps, {} Mbps, origen ({},{}) {}x{}", epoch, to_string(codec), stream_size.width,
-                  stream_size.height, fps, bitrate_kbps / 1000, source.x, source.y, source.width, source.height);
+        log::info("Stream {}: {} {}x{} @ {} fps, {} Mbps{}{}, origen ({},{}) {}x{}", epoch, to_string(codec), stream_size.width,
+                  stream_size.height, fps, bitrate_kbps / 1000, p->info.chroma_444 ? ", 4:4:4" : "", p->info.hdr ? ", HDR" : "",
+                  source.x, source.y, source.width, source.height);
         {
             std::scoped_lock lock(mutex_);
             window_interval_us_ = 1'000'000 / fps;
@@ -389,18 +478,16 @@ void Streamer::run() {
     while (running_) {
         // ¿Reconfiguración pendiente?
         std::optional<proto::StreamConfig> cfg;
-        std::vector<Codec> decoders;
+        proto::ClientCaps client;
         std::uint32_t audio_rate = 0;
         std::uint8_t audio_channels = 0;
-        bool client_slices = false;
         {
             std::unique_lock lock(mutex_);
             if (!p && !pending_) cv_.wait_for(lock, std::chrono::milliseconds(200), [&] { return pending_ || !running_; });
             if (pending_) {
                 cfg = pending_;
                 pending_.reset();
-                decoders = client_decoders_;
-                client_slices = client_slices_;
+                client = client_;
                 audio_rate = audio_rate_;
                 audio_channels = audio_channels_;
             }
@@ -434,7 +521,7 @@ void Streamer::run() {
                     std::scoped_lock lock(mutex_);
                     adapt_reason_.clear();
                 }
-                build(*cfg, decoders, audio_rate, audio_channels, client_slices);
+                build(*cfg, client, audio_rate, audio_channels);
             }
         }
         if (!p) continue;
@@ -447,20 +534,18 @@ void Streamer::run() {
             } else if (const auto step = adapt::next_step(p->stream_size, p->info.fps, adapt_scale_)) {
                 adapt_scale_ = step->scale;
                 if (step->fps != 0) adapt_fps_ = step->fps;
-                std::vector<Codec> decs;
-                bool slices_ok = false;
+                proto::ClientCaps caps;
                 std::uint32_t arate = 0;
                 std::uint8_t achannels = 0;
                 {
                     std::scoped_lock lock(mutex_);
-                    decs = client_decoders_;
-                    slices_ok = client_slices_;
+                    caps = client_;
                     arate = audio_rate_;
                     achannels = audio_channels_;
                     log::warn("Ajuste automático: {}", adapt_reason_);
                 }
                 const proto::StreamConfig same = p->config;
-                build(same, decs, arate, achannels, slices_ok);
+                build(same, caps, arate, achannels);
                 if (!p) continue;
             } else {
                 std::scoped_lock lock(mutex_);
@@ -558,7 +643,9 @@ void Streamer::run() {
         const std::uint64_t encode_start_us = gpu::now_us();
         ID3D11Texture2D* target = p->nv12[p->nv12_index].Get();
         p->nv12_index = (p->nv12_index + 1) % p->nv12.size();
-        if (!p->vp->process(p->capture->texture(), 0, target, nullptr, nullptr, p->capture->rotation())) {
+        const bool converted = p->packer ? p->packer->process(p->capture->texture(), target)
+                                         : p->vp->process(p->capture->texture(), 0, target, nullptr, nullptr, p->capture->rotation());
+        if (!converted) {
             fail("Falló la conversión de color en la GPU");
             continue;
         }

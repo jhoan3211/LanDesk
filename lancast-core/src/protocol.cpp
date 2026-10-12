@@ -94,6 +94,7 @@ void ClientCaps::write(ByteWriter& w) const {
     write_codecs(w, decoders);
     w.u32(display_width).u32(display_height).u32(display_refresh);
     w.boolean(supports_slices);
+    w.boolean(supports_444).boolean(supports_hdr);
 }
 
 std::optional<ClientCaps> ClientCaps::read(ByteReader& r) {
@@ -104,6 +105,10 @@ std::optional<ClientCaps> ClientCaps::read(ByteReader& r) {
     c.display_height = r.u32();
     c.display_refresh = r.u32();
     if (r.ok() && r.remaining() >= 1) c.supports_slices = r.boolean();
+    if (r.ok() && r.remaining() >= 2) {  // Ausentes en clientes 1.3.
+        c.supports_444 = r.boolean();
+        c.supports_hdr = r.boolean();
+    }
     return finish(r, std::move(c));
 }
 
@@ -197,6 +202,7 @@ void StreamStarted::write(ByteWriter& w) const {
     write_rect(w, source);
     w.u32(audio_rate).u8(audio_channels).str(notes);
     w.boolean(intra_refresh).boolean(slices).str(encoder_backend).u8(stream_index);
+    w.boolean(chroma_444).boolean(hdr);
 }
 
 std::optional<StreamStarted> StreamStarted::read(ByteReader& r) {
@@ -219,6 +225,10 @@ std::optional<StreamStarted> StreamStarted::read(ByteReader& r) {
         if (r.ok() && r.remaining() >= 1) s.stream_index = r.u8();
     }
     if (static_cast<int>(s.codec) > 2) return std::nullopt;
+    if (r.ok() && r.remaining() >= 2) {  // Ausentes en hosts 1.3.
+        s.chroma_444 = r.boolean();
+        s.hdr = r.boolean();
+    }
     return finish(r, std::move(s));
 }
 

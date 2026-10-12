@@ -138,6 +138,9 @@ void App::start_connect(const std::string& address) {
     caps.client_name = settings_.device_name;
     caps.decoders = mf::available_decoders();
     caps.supports_slices = true;
+    caps.supports_444 = true;
+    // HDR: el stream de 10 bits va en HEVC o AV1 (H.264 no tiene 10 bits por hardware).
+    caps.supports_hdr = std::ranges::any_of(caps.decoders, [](Codec c) { return c == Codec::Hevc || c == Codec::Av1; });
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
     caps.display_width = static_cast<std::uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left);

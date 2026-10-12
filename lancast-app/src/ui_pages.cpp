@@ -309,6 +309,9 @@ void App::draw_stream_settings(bool live) {
         ImGui::SameLine();
         if (ImGui::RadioButton("4:4:4", &chroma, 1)) changed = true;
         s.chroma_444 = chroma == 1;
+        help("4:4:4 guarda el color de cada píxel: texto e íconos nítidos, sin bordes de color (ideal para trabajar). "
+             "Funciona con cualquier códec, pero el host codifica el doble de píxeles: si su GPU no da abasto, el ajuste "
+             "automático bajará la resolución.");
 
         row("Color");
         int hdr = s.hdr ? 1 : 0;
@@ -316,6 +319,9 @@ void App::draw_stream_settings(bool live) {
         ImGui::SameLine();
         if (ImGui::RadioButton("10 bits HDR", &hdr, 1)) changed = true;
         s.hdr = hdr == 1;
+        help("Requiere el monitor del host en modo HDR (Configuración → Pantalla → Usar HDR), GPU AMD o NVIDIA en el host "
+             "y HEVC o AV1. En una pantalla HDR se ve en HDR; en una SDR se adapta (tone mapping). Si algo falta, se usa "
+             "SDR y se avisa.");
 
         row("Escalado");
         int sc = static_cast<int>(s.scaling);

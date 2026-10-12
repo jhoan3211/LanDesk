@@ -247,6 +247,7 @@ std::vector<Profile> default_profiles() {
     Profile work{"Trabajo 1440p 4:4:4", {}};
     work.stream.resolution = ResolutionPreset::R1440;
     work.stream.fps = 60;
+    work.stream.fps_match_display = false;
     work.stream.chroma_444 = true;
     work.stream.codec = CodecChoice::Hevc;
     out.push_back(work);
@@ -262,6 +263,7 @@ std::vector<Profile> default_profiles() {
     Profile phone{"Celular", {}};
     phone.stream.resolution = ResolutionPreset::R720;
     phone.stream.fps = 30;
+    phone.stream.fps_match_display = false;
     phone.stream.codec = CodecChoice::H264;
     phone.stream.auto_bitrate = false;
     phone.stream.bitrate_mbps = 8;

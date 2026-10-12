@@ -8,12 +8,14 @@ void VideoRenderer::reset() {
     last_.reset();
     decoder_.reset();
     vp_.reset();
+    yuv_.reset();
     epoch_ = 0xFFFF;
 }
 
 bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarted& stream, double& decode_ms) {
     const Size size{stream.width, stream.height};
-    if (!decoder_ || epoch_ != stream.epoch || codec_ != stream.codec || size_ != size) {
+    if (!decoder_ || epoch_ != stream.epoch || codec_ != stream.codec || size_ != size || chroma_444_ != stream.chroma_444 ||
+        hdr_ != stream.hdr) {
         // Nueva configuración: solo se puede empezar por un keyframe.
         if (!frame.frame.info.keyframe) {
             needs_keyframe_ = true;
@@ -21,7 +23,8 @@ bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarte
         }
         last_.reset();
         decoder_.reset();
-        auto dec = mf::create_decoder(device_, stream.codec, size);
+        // 4:4:4 empaquetado: el cuadro codificado mide el doble de alto.
+        auto dec = mf::create_decoder(device_, stream.codec, gpu::coded_size(size, stream.chroma_444), stream.hdr);
         if (!dec) {
             error_ = dec.error().message();
             log::error("Decodificador: {}", error_);
@@ -31,6 +34,9 @@ bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarte
         epoch_ = stream.epoch;
         codec_ = stream.codec;
         size_ = size;
+        chroma_444_ = stream.chroma_444;
+        hdr_ = stream.hdr;
+        yuv_.reset();
         error_.clear();
     }
 
@@ -54,11 +60,35 @@ bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarte
     }
     inputs_without_output_ = 0;
     last_ = std::move(**out);
+    converted_ = false;
     return true;
 }
 
-bool VideoRenderer::draw(ID3D11Texture2D* backbuffer, Size backbuffer_size, const Rect& view) {
+bool VideoRenderer::draw(ID3D11Texture2D* backbuffer, Size backbuffer_size, const Rect& view, const Output& output) {
     if (!last_) return false;
+    if (chroma_444_ || hdr_) {
+        // Reconstrucción por shader (4:4:4 empaquetado y/o HDR de 10 bits).
+        if (!yuv_) {
+            auto r = gpu::YuvRenderer::create(device_, size_, chroma_444_, hdr_);
+            if (!r) {
+                error_ = r.error().message();
+                log::error("Reconstrucción de color: {}", error_);
+                return false;
+            }
+            yuv_ = std::move(*r);
+        }
+        if (!converted_) {
+            yuv_->convert(last_->texture.Get(), last_->subresource);
+            converted_ = true;
+        }
+        gpu::ComPtr<ID3D11RenderTargetView> own;
+        ID3D11RenderTargetView* rtv = output.rtv;
+        if (rtv == nullptr) {
+            if (FAILED(device_.device->CreateRenderTargetView(backbuffer, nullptr, &own))) return false;
+            rtv = own.Get();
+        }
+        return yuv_->present(rtv, backbuffer_size, view, output.hdr, output.sdr_white_nits, output.peak_nits);
+    }
     if (!vp_ || vp_->input_size() != size_ || vp_out_ != backbuffer_size) {
         auto vp = gpu::VideoProcessor::create(device_, size_, backbuffer_size, gpu::ColorConversion::YuvToRgb709);
         if (!vp) {

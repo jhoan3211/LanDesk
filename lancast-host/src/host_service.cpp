@@ -612,7 +612,7 @@ struct HostService::Impl {
             s.second = std::make_unique<Streamer>(*s.media, std::move(cb), std::uint8_t{1});
             log::info("Segundo stream: monitor {}", c.monitor_id);
         }
-        s.second->configure(c, s.caps.decoders, 0, 0, s.caps.supports_slices);
+        s.second->configure(c, s.caps, 0, 0);
     }
 
     void run_session(Session& s) {
@@ -655,8 +655,7 @@ struct HostService::Impl {
                         const std::uint32_t rate = c->audio_rate == 0 ? fmt.sample_rate : std::clamp<std::uint32_t>(c->audio_rate, 8000, 192000);
                         s.audio_target_rate = c->audio_rate == 0 ? 0 : rate;
                         s.audio_target_channels = c->audio_channels == 1 ? 1 : 2;
-                        s.streamer->configure(*c, s.caps.decoders, rate, s.audio_target_channels.load(),
-                                              s.caps.supports_slices);
+                        s.streamer->configure(*c, s.caps, rate, s.audio_target_channels.load());
                     }
                     break;
                 case proto::MsgType::RequestKeyframe: {

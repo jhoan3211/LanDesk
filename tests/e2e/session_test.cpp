@@ -67,6 +67,8 @@ proto::ClientCaps make_caps(const char* name) {
     caps.client_name = name;
     caps.decoders = mf::available_decoders();
     caps.supports_slices = true;
+    caps.supports_444 = true;
+    caps.supports_hdr = true;
     caps.display_width = 1920;
     caps.display_height = 1080;
     return caps;
@@ -206,8 +208,45 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_EQ(client.stream()->bitrate_kbps, 15000u);
     EXPECT_EQ(client.stream()->epoch, epoch_before) << "Un cambio de audio/bitrate no debe recrear el codificador";
 
+    // 3b2) 4:4:4 + HDR: el host empaca el color completo (cuadro W×2H); HDR solo si su monitor está en modo HDR.
+    {
+        proto::StreamConfig c444 = cfg3;
+        c444.chroma_444 = true;
+        c444.hdr = true;
+        c444.codec = CodecChoice::Hevc;
+        const std::uint16_t before = client.stream()->epoch;
+        client.request_stream(c444);
+        ASSERT_TRUE(wait_for([&] { return client.stream() && client.stream()->epoch != before; }, 3000));
+        const auto s444 = *client.stream();
+        std::printf("  4:4:4%s: %s %ux%u (codificado %ux%u)%s\n", s444.hdr ? " HDR" : "", std::string{to_string(s444.codec)}.c_str(),
+                    s444.width, s444.height, s444.width, s444.chroma_444 ? s444.height * 2 : s444.height,
+                    s444.notes.empty() ? "" : (" — " + s444.notes).c_str());
+        EXPECT_TRUE(s444.chroma_444);
+        auto dec444 = mf::create_decoder(*device, s444.codec, {s444.width, s444.chroma_444 ? s444.height * 2 : s444.height}, s444.hdr);
+        ASSERT_TRUE(dec444.has_value()) << dec444.error().message();
+        int got444 = 0;
+        bool key444 = false;
+        const std::uint64_t until444 = gpu::now_us() + 1'500'000;
+        while (gpu::now_us() < until444 && got444 < 3) {
+            WaitForSingleObject(client.frame_event(), 50);
+            for (auto& f : client.take_frames()) {
+                if (f.frame.info.epoch != s444.epoch) continue;
+                key444 = key444 || f.frame.info.keyframe;
+                if (!key444) continue;
+                auto out = (*dec444)->decode(f.frame.data, f.frame.info.capture_time_us);
+                ASSERT_TRUE(out.has_value()) << out.error().message();
+                if (out->has_value()) ++got444;
+            }
+            if (!key444) client.request_keyframe();
+        }
+        EXPECT_GE(got444, 1) << "No se decodificó ningún cuadro 4:4:4";
+        client.request_stream(cfg3);  // Volver a 4:2:0 para el resto de la prueba.
+        ASSERT_TRUE(wait_for([&] { return client.stream() && !client.stream()->chroma_444; }, 3000));
+    }
+
     // 3c) Segundo stream en paralelo (índice 1, sin audio): llegan cuadros por separado y se detiene.
     {
+        const std::uint16_t main_epoch = client.stream()->epoch;
         proto::StreamConfig second = cfg3;
         second.stream_index = 1;
         second.audio = false;
@@ -235,7 +274,7 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
             client.stop_second_stream();
             ASSERT_TRUE(wait_for([&] { return !client.stream(1).has_value(); }, 2000));
         }
-        EXPECT_EQ(client.stream()->epoch, epoch_before) << "El segundo stream no debe tocar el principal";
+        EXPECT_EQ(client.stream()->epoch, main_epoch) << "El segundo stream no debe tocar el principal";
     }
 
     // 4) Transferencia de archivo (cliente -> host) con verificación.

@@ -33,8 +33,8 @@ public:
     Streamer(const Streamer&) = delete;
     Streamer& operator=(const Streamer&) = delete;
 
-    void configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
-                   std::uint32_t audio_rate, std::uint8_t audio_channels, bool client_slices);
+    void configure(const proto::StreamConfig& config, const proto::ClientCaps& client, std::uint32_t audio_rate,
+                   std::uint8_t audio_channels);
     void request_keyframe() noexcept { keyframe_requested_ = true; }
     // Pérdida de un cuadro: si el stream usa intra-refresh se repara con una ola de refresco; si no, keyframe.
     void request_recovery(proto::RecoveryReason reason) noexcept {
@@ -83,8 +83,7 @@ private:
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::optional<proto::StreamConfig> pending_;
-    std::vector<Codec> client_decoders_;
-    bool client_slices_ = false;
+    proto::ClientCaps client_;
     std::uint32_t audio_rate_ = 0;
     std::uint8_t audio_channels_ = 0;
     std::optional<proto::StreamStarted> current_;

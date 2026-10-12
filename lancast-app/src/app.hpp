@@ -17,6 +17,7 @@
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/settings.hpp"
 #include "lancast/host/host_service.hpp"
+#include "lancast/platform/color.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/service.hpp"
 #include "lancast/platform/system.hpp"
@@ -86,6 +87,9 @@ private:
     [[nodiscard]] std::uint32_t requested_fps(const StreamSettings& s) const;
     void follow_display();
     void update_presentation_mode();
+    // Pantalla HDR + stream HDR: back buffer scRGB (FP16) y la interfaz compuesta al brillo SDR de Windows.
+    void update_hdr_output(bool force);
+    bool ensure_ui_target();
     bool sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const client::LatencyTarget& target);
     void switch_monitor(std::uint32_t id);
     void process_client();
@@ -203,6 +207,17 @@ private:
     bool update_dismissed_ = false;
     std::atomic<bool> update_cancel_{false};
     std::thread update_thread_;
+
+    // Salida HDR del cliente.
+    bool hdr_output_ = false;
+    DXGI_FORMAT swap_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
+    gpu::DisplayColor display_color_;
+    std::uint64_t hdr_checked_us_ = 0;
+    std::uint16_t hdr_checked_epoch_ = 0xFFFF;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> ui_tex_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> ui_rtv_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> ui_srv_;
+    std::unique_ptr<gpu::UiCompositor> ui_compositor_;
 
     // Host como servicio de Windows (instalación elevada en un hilo propio).
     bool service_host_ = false;

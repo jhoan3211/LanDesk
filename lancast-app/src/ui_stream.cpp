@@ -376,8 +376,9 @@ void App::draw_stats_overlay() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     if (stream) {
-        ImGui::TextColored(kAccent, "%s %ux%u @ %u fps · %u Mbps", std::string{to_string(stream->codec)}.c_str(), stream->width,
-                           stream->height, stream->fps, stream->bitrate_kbps / 1000);
+        ImGui::TextColored(kAccent, "%s %ux%u @ %u fps · %u Mbps%s%s", std::string{to_string(stream->codec)}.c_str(),
+                           stream->width, stream->height, stream->fps, stream->bitrate_kbps / 1000,
+                           stream->chroma_444 ? " · 4:4:4" : "", stream->hdr ? (hdr_output_ ? " · HDR" : " · HDR→SDR") : "");
     }
     ImGui::Text("FPS: %.0f   Bitrate: %.1f Mbps", s.fps, s.bitrate_mbps);
     ImGui::Separator();
