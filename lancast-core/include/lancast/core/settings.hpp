@@ -71,6 +71,9 @@ struct HostSettings {
     std::vector<std::string> ip_whitelist;  // Vacía = cualquier IP privada.
     std::string receive_folder;             // Vacío = Descargas\LanCast.
     bool overwrite_existing = false;
+    // Barra roja "Sesión activa desde… [Desconectar]" arriba de la pantalla mientras alguien está conectado.
+    // Apagada por defecto: queda la notificación de Windows, el ícono de la bandeja y la página "Este equipo".
+    bool session_banner = false;
 };
 
 struct ClientSettings {

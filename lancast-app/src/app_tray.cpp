@@ -101,7 +101,7 @@ void App::tray_menu() {
 
 void App::update_session_banner() {
     const host::Status st = host_.status();
-    if (!st.session_active) {
+    if (!st.session_active || !settings_.host.session_banner) {
         if (banner_ != nullptr) {
             DestroyWindow(banner_);
             banner_ = nullptr;

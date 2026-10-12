@@ -79,6 +79,12 @@ private:
     std::uint64_t adapt_hold_until_us_ = 0;
     std::uint64_t window_skipped_ = 0;
     std::uint64_t window_interval_us_ = 0;
+    // Recuperación de la calidad (protegido por mutex_, salvo los atómicos).
+    std::atomic<bool> restore_requested_{false};
+    std::atomic<bool> adapted_{false};  // Hay un recorte activo (resolución o FPS).
+    int calm_windows_ = 0;
+    int restore_after_ = 20;
+    std::uint64_t last_restore_us_ = 0;
 
     mutable std::mutex mutex_;
     std::condition_variable cv_;

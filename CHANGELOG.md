@@ -3,6 +3,13 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.6.1
+
+### PC (host)
+- **Sin la barra roja "Sesión activa desde… [Desconectar]"** en el equipo controlado: la desconexión ya está en la barra del cliente. Siguen el aviso de Windows al conectarse, el ícono de la bandeja y el botón *Desconectar* en *Este equipo*. Se puede volver a activar en *Este equipo → Permisos*.
+- **Arreglo: el ajuste automático bajaba la calidad sin necesidad.** Tomaba como "sobrecarga" que un cuadro tardara más en codificarse que el tiempo entre cuadros, pero el codificador trabaja en cadena (varios cuadros a la vez): en una GPU AMD tarda ~7-8 ms tanto a 1080p como a 1440p y aun así entrega 165 fps. Resultado: bajaba a 720p y menos FPS sin ganar latencia. Ahora solo baja si se saltan más del 10 % de los cuadros o si se acumulan (latencia mayor a 2,5 intervalos).
+- **El ajuste automático recupera la calidad**: si todo va bien durante 20 segundos, sube un escalón (primero los FPS, después la resolución) hasta volver a lo pedido. Si al subir vuelve a sobrecargarse enseguida, espera el doble antes de intentarlo de nuevo (hasta ~5 minutos), para no oscilar.
+
 ## 1.6.0
 
 ### PC (cliente)

@@ -154,6 +154,7 @@ std::string settings_to_toml(const AppSettings& s) {
     h.set("ip_whitelist", s.host.ip_whitelist);
     h.set("receive_folder", s.host.receive_folder);
     h.set("overwrite_existing", s.host.overwrite_existing);
+    h.set("session_banner", s.host.session_banner);
 
     toml::Table& c = doc.table_mut("client");
     c.set("recent_addresses", s.client.recent_addresses);
@@ -206,6 +207,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.host.ip_whitelist = h->get_strings("ip_whitelist");
         s.host.receive_folder = h->get_string("receive_folder").value_or("");
         s.host.overwrite_existing = h->get_bool("overwrite_existing").value_or(s.host.overwrite_existing);
+        s.host.session_banner = h->get_bool("session_banner").value_or(false);
     }
     if (const toml::Table* c = doc.table("client")) {
         s.client.recent_addresses = c->get_strings("recent_addresses");

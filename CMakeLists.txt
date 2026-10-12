@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(LanCast
-    VERSION 1.6.0
+    VERSION 1.6.1
     DESCRIPTION "Escritorio remoto y streaming de pantalla de baja latencia para LAN"
     LANGUAGES CXX)
 
