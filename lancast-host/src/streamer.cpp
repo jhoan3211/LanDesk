@@ -423,8 +423,19 @@ void Streamer::run() {
                 const double interval_ms = static_cast<double>(window_interval_us_) / 1000.0;
                 const bool overloaded = adapt::overloaded(stats_.encode_ms, interval_ms, stats_.skipped_percent, window_frames_);
                 overload_windows_ = overloaded ? overload_windows_ + 1 : 0;
+                calm_windows_ = adapt::calm(stats_.encode_ms, interval_ms, stats_.skipped_percent, window_frames_) ? calm_windows_ + 1 : 0;
+                if (adapted_ && calm_windows_ >= restore_after_ && encoded_us >= adapt_hold_until_us_) {
+                    // Todo va bien hace un rato: se intenta volver a la calidad pedida, un escalón por vez.
+                    calm_windows_ = 0;
+                    adapt_reason_ = std::format("todo va bien hace {} s: se sube la calidad", restore_after_);
+                    restore_requested_ = true;
+                }
                 if (overload_windows_ >= 2 && encoded_us >= adapt_hold_until_us_) {
                     overload_windows_ = 0;
+                    // Si se sobrecarga poco después de subir la calidad, se espera más antes de volver a intentarlo.
+                    if (last_restore_us_ != 0 && encoded_us - last_restore_us_ < 30'000'000) {
+                        restore_after_ = std::min(restore_after_ * 2, adapt::kRestoreAfterMax);
+                    }
                     adapt_reason_ = stats_.skipped_percent > 10.0
                                         ? std::format("el codificador no daba abasto ({:.0f} % de cuadros saltados)",
                                                       stats_.skipped_percent)
@@ -524,9 +535,14 @@ void Streamer::run() {
                 adapt_scale_ = 1.0;  // Nueva configuración del cliente: se vuelve a intentar sin recortes.
                 adapt_fps_ = 0;
                 adapt_requested_ = false;
+                restore_requested_ = false;
+                adapted_ = false;
                 {
                     std::scoped_lock lock(mutex_);
                     adapt_reason_.clear();
+                    calm_windows_ = 0;
+                    restore_after_ = adapt::kRestoreAfterSeconds;
+                    last_restore_us_ = 0;
                 }
                 build(*cfg, client, audio_rate, audio_channels);
             }
@@ -541,6 +557,7 @@ void Streamer::run() {
             } else if (const auto step = adapt::next_step(p->stream_size, p->info.fps, adapt_scale_)) {
                 adapt_scale_ = step->scale;
                 if (step->fps != 0) adapt_fps_ = step->fps;
+                adapted_ = true;
                 proto::ClientCaps caps;
                 std::uint32_t arate = 0;
                 std::uint8_t achannels = 0;
@@ -557,6 +574,33 @@ void Streamer::run() {
             } else {
                 std::scoped_lock lock(mutex_);
                 log::warn("Ajuste automático: ya en el mínimo (720p, 30 fps); {}", adapt_reason_);
+                adapt_reason_.clear();
+            }
+        }
+
+        // Recuperación de la calidad pedida.
+        if (restore_requested_.exchange(false)) {
+            if (const auto level = adapt::restore_step({adapt_scale_, adapt_fps_}, p->config.fps)) {
+                adapt_scale_ = level->scale;
+                adapt_fps_ = level->fps_cap;
+                adapted_ = adapt_scale_ < 0.999 || adapt_fps_ != 0;
+                proto::ClientCaps caps;
+                std::uint32_t arate = 0;
+                std::uint8_t achannels = 0;
+                {
+                    std::scoped_lock lock(mutex_);
+                    caps = client_;
+                    arate = audio_rate_;
+                    achannels = audio_channels_;
+                    last_restore_us_ = gpu::now_us();
+                    log::info("Ajuste automático: {}", adapt_reason_);
+                }
+                const proto::StreamConfig same = p->config;
+                build(same, caps, arate, achannels);
+                if (!p) continue;
+            } else {
+                adapted_ = false;
+                std::scoped_lock lock(mutex_);
                 adapt_reason_.clear();
             }
         }

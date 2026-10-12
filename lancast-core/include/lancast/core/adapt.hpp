@@ -35,4 +35,28 @@ struct Step {
     return std::nullopt;
 }
 
+// Recuperación: deshace un escalón (primero los FPS, después la resolución) hasta volver a lo pedido.
+struct Level {
+    double scale;           // 1 = resolución pedida.
+    std::uint32_t fps_cap;  // 0 = sin límite (los FPS pedidos).
+};
+[[nodiscard]] inline std::optional<Level> restore_step(Level now, std::uint32_t requested_fps) noexcept {
+    if (now.fps_cap != 0) {
+        const std::uint32_t up = now.fps_cap * 4 / 3 + 1;
+        return Level{now.scale, up >= requested_fps ? 0u : up};
+    }
+    if (now.scale < 0.999) return Level{std::min(1.0, now.scale / 0.8), 0};
+    return std::nullopt;  // Ya está en la calidad pedida.
+}
+
+// Ventana tranquila: sin sobrecarga y casi sin cuadros saltados (la pantalla quieta también cuenta).
+[[nodiscard]] inline bool calm(double encode_ms, double interval_ms, double skipped_percent, std::uint64_t frames) noexcept {
+    return !overloaded(encode_ms, interval_ms, skipped_percent, frames) && skipped_percent < 1.0;
+}
+
+// Segundos tranquilos antes de subir la calidad: 20; si al subir vuelve a sobrecargarse enseguida, se duplica
+// (hasta ~5 min) para no oscilar.
+inline constexpr int kRestoreAfterSeconds = 20;
+inline constexpr int kRestoreAfterMax = 320;
+
 }  // namespace lancast::adapt
