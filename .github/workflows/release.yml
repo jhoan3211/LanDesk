@@ -35,6 +35,7 @@ jobs:
       PDB: build/lancast-app/Release/LanCast.pdb
       HAS_AZURE_SIGNING: ${{ secrets.AZURE_CLIENT_ID != '' && vars.ARTIFACT_SIGNING_ACCOUNT != '' }}
       HAS_PFX_SIGNING: ${{ secrets.SIGNING_PFX_BASE64 != '' }}
+      HAS_ANDROID_KEY: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -115,6 +116,28 @@ jobs:
             "Publicado sin firma digital." | Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY -Append
           }
 
+      # App Android firmada (si están los secretos de la clave de firma; ver docs/firma-de-codigo.md).
+      - name: App Android
+        if: env.HAS_ANDROID_KEY == 'true'
+        shell: pwsh
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          $jks = Join-Path $env:RUNNER_TEMP 'lancast-android.jks'
+          [IO.File]::WriteAllBytes($jks, [Convert]::FromBase64String($env:KEYSTORE_BASE64))
+          try {
+            "storeFile=$($jks.Replace('\', '/'))`nstorePassword=$env:KEYSTORE_PASSWORD`nkeyAlias=lancast`nkeyPassword=$env:KEYSTORE_PASSWORD" |
+              Set-Content android/keystore.properties -Encoding ascii
+            Push-Location android
+            ./gradlew.bat :app:assembleRelease --console=plain
+            if ($LASTEXITCODE -ne 0) { throw "Falló la compilación de la app Android" }
+            Pop-Location
+            Copy-Item android/app/build/outputs/apk/release/app-release.apk LanCast.apk
+          } finally {
+            Remove-Item $jks, android/keystore.properties -Force -ErrorAction SilentlyContinue
+          }
+
       - name: SHA-256
         id: hash
         shell: pwsh
@@ -131,5 +154,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $v = '${{ steps.version.outputs.version }}'
-          gh release create "v$v" $env:EXE $env:PDB --title "LanCast $v" --notes-file notes.md --target $env:GITHUB_SHA
+          $files = @($env:EXE, $env:PDB)
+          if (Test-Path LanCast.apk) { $files += 'LanCast.apk' }
+          gh release create "v$v" @files --title "LanCast $v" --notes-file notes.md --target $env:GITHUB_SHA
           if ($LASTEXITCODE -ne 0) { throw "No se pudo crear el release v$v (¿ya existe?)" }

@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Ícono: un monitor con la señal de transmisión (mismo concepto que el ícono de LanCast.exe). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Pantalla -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M30,34h48a4,4 0,0 1,4 4v28a4,4 0,0 1,-4 4h-48a4,4 0,0 1,-4 -4v-28a4,4 0,0 1,4 -4z" />
+    <path
+        android:fillColor="#FF1C1F26"
+        android:pathData="M31,38h46v27h-46z" />
+    <!-- Pie -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M48,70h12v5h-12zM42,75h24v3h-24z" />
+    <!-- Ondas -->
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FF4A90E2"
+        android:strokeWidth="3"
+        android:strokeLineCap="round"
+        android:pathData="M44,58a10,10 0,0 1,20 0M49,58a5,5 0,0 1,10 0" />
+    <path
+        android:fillColor="#FF4A90E2"
+        android:pathData="M54,58m-2,0a2,2 0,1 1,4 0a2,2 0,1 1,-4 0" />
+</vector>

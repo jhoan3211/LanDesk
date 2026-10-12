@@ -37,6 +37,17 @@ HSM en la nube), así que:
   workflow no puede usarlo directamente: publica el release, firma `LanCast.exe` en tu PC con `signtool` y súbelo
   reemplazando el del release, actualizando la línea `SHA-256:` de las notas con el hash del archivo firmado.
 
+## App Android
+
+Android exige que **todas las versiones de la app se firmen con la misma clave**; si la clave se pierde, los teléfonos
+no podrán actualizar la app (habría que desinstalarla e instalar de nuevo).
+
+- La clave está en `%USERPROFILE%\.lancast\lancast-android-release.jks` y su contraseña en `android/keystore.properties`
+  (fuera de git). **Haz una copia de seguridad de los dos archivos** en un lugar seguro.
+- Para que el workflow publique `LanCast.apk` firmado en cada versión, crea en GitHub los secretos
+  `ANDROID_KEYSTORE_BASE64` (el .jks en Base64: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("lancast-android-release.jks"))`)
+  y `ANDROID_KEYSTORE_PASSWORD`. Sin ellos, el release sale sin APK y se puede subir a mano.
+
 ## Verificar
 
 En el resumen del workflow aparece "Firmado por: …". En el PC: clic derecho en `LanCast.exe` → *Propiedades* →

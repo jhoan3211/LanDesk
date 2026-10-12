@@ -3,6 +3,19 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.5.0
+
+### App para Android (nueva)
+- **LanCast para Android**: ve y controla el PC desde el celular. Instala `LanCast.apk` (en este release) en el teléfono.
+- Encuentra los PC solos en la red (o por IP), se empareja con el mismo PIN de 6 dígitos y después se conecta sin PIN.
+- Video por el decodificador de hardware del teléfono en modo de baja latencia (HEVC, H.264 o AV1), audio del PC y Wi-Fi de baja latencia.
+- **Touchpad**: un dedo mueve el cursor, toque = clic, dos dedos = clic derecho y rueda, pellizcar = zoom (la vista sigue al cursor), mantener = arrastrar, tres dedos = teclado. También modo de toque directo.
+- **Teclado** del teléfono con tildes y ñ, más una barra con Esc, Tab, Ctrl, Alt, Mayús, Win, flechas, Supr y F1–F12.
+- Barra con pestaña arriba al centro: monitor, calidad, Ctrl+Alt+Supr, estadísticas y desconectar. Se reconecta sola si se corta el Wi-Fi.
+
+### PC
+- Nuevo mensaje de **texto** para escribir desde teclados de celular (tildes, ñ, emojis). Necesario para escribir desde la app.
+
 ## 1.4.0
 
 ### Novedades

@@ -18,6 +18,29 @@ Escritorio remoto y streaming de pantalla **para tu red local (LAN)**: ve y cont
 
 Requisitos: Windows 10 (1809+) u 11 de 64 bits y una GPU con codificación/decodificación por hardware (NVIDIA, AMD o Intel) con el driver actualizado. Para HEVC en el equipo cliente, Windows necesita la extensión **"Extensiones de video HEVC"** de Microsoft Store; si no está, LanCast usa H.264 automáticamente.
 
+## App para Android (ver y controlar el PC desde el celular)
+
+1. En el celular, abre la página de *Releases* (<https://github.com/jhoan3211/LanDesk/releases>) y descarga **`LanCast.apk`**.
+2. Ábrelo para instalarlo. Android pedirá permitir *instalar apps de origen desconocido* para el navegador (o el administrador de archivos): actívalo solo para esta instalación.
+3. El celular debe estar en la **misma red** que los PC (por ejemplo, Wi-Fi del access point conectado al switch, IP `192.168.40.x`).
+4. Abre LanCast en el celular: los PC aparecen solos en **Equipos en la red** (o escribe la IP). La primera vez escribe el **PIN** que muestra el PC.
+
+En el PC hace falta LanCast **1.5** o superior para escribir texto desde el teclado del celular (el resto funciona desde la 1.4).
+
+| Gesto (modo touchpad) | Acción en el PC |
+|---|---|
+| Deslizar un dedo | Mover el cursor (con aceleración, como un touchpad) |
+| Tocar | Clic |
+| Tocar con dos dedos | Clic derecho |
+| Deslizar dos dedos | Rueda (vertical y horizontal) |
+| Pellizcar | Zoom de la vista (la vista sigue al cursor) |
+| Mantener presionado, o doble toque y arrastrar | Arrastrar (botón izquierdo presionado) |
+| Tocar con tres dedos | Abrir / cerrar el teclado |
+
+En **modo directo** el clic cae donde tocas. La **pestaña** de arriba al centro abre la barra: teclado, modo, monitor, calidad, Ctrl+Alt+Supr, zoom 1:1, estadísticas y desconectar. Con el teclado abierto aparece una barra con Esc, Tab, Ctrl, Alt, Mayús, Win, flechas, Inicio, Fin, Supr y F1–F12 (Ctrl/Alt/Mayús quedan fijados para la siguiente tecla: Ctrl → C = copiar).
+
+La app usa el decodificador de **hardware** del teléfono en modo de baja latencia, pide al PC la resolución y los Hz de la pantalla del celular, mantiene el Wi-Fi en modo de baja latencia mientras transmite y se reconecta sola si se corta.
+
 ## Primer uso: conectar un PC a otro
 
 En el **PC que vas a controlar** (host), por ejemplo `192.168.40.7`:
@@ -168,6 +191,7 @@ lancast-platform/   Windows: DXGI/D3D11, captura, procesador de video, Media Fou
 lancast-host/       Servicio de host: emparejamiento, sesión, tubería de video y audio
 lancast-client/     Sesión de cliente: conexión, recepción con FEC, reloj, audio, archivos
 lancast-app/        LanCast.exe: interfaz (Dear ImGui), presentación, entrada, bandeja
+android/            App Android: core (protocolo, cifrado y FEC en Kotlin, probado contra el host real) y app
 tests/              Unitarias (core), integración con el hardware (platform) y extremo a extremo (e2e)
 ```
 
@@ -184,4 +208,4 @@ tests/              Unitarias (core), integración con el hardware (platform) y 
 ## Pendiente
 
 - Cliente web para el celular (HTTPS, video, táctil y archivos).
-- App Android para compartir la pantalla del celular (opcional).
+- App Android para compartir la pantalla del celular hacia el PC (opcional).
