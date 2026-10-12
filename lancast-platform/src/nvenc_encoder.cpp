@@ -109,7 +109,7 @@ public:
             r.width = config_.size.width;
             r.height = config_.size.height;
             r.resourceToRegister = nv12;
-            r.bufferFormat = NV_ENC_BUFFER_FORMAT_NV12;
+            r.bufferFormat = config_.ten_bit ? NV_ENC_BUFFER_FORMAT_YUV420_10BIT : NV_ENC_BUFFER_FORMAT_NV12;
             r.bufferUsage = NV_ENC_INPUT_IMAGE;
             if (const NVENCSTATUS st = api_.nvEncRegisterResource(encoder_, &r); st != NV_ENC_SUCCESS) {
                 release(index);
@@ -253,11 +253,14 @@ private:
             return std::unexpected(platform::Error{std::format("NVENC: no se pudo abrir la sesión ({})", static_cast<int>(st)), 0});
         }
 
+        if (config_.ten_bit && config_.codec == Codec::H264) {
+            return std::unexpected(platform::Error{"NVENC: H.264 no admite 10 bits (HDR)", 0});
+        }
         GUID codec_guid = NV_ENC_CODEC_H264_GUID;
         GUID profile_guid = NV_ENC_H264_PROFILE_HIGH_GUID;
         if (config_.codec == Codec::Hevc) {
             codec_guid = NV_ENC_CODEC_HEVC_GUID;
-            profile_guid = NV_ENC_HEVC_PROFILE_MAIN_GUID;
+            profile_guid = config_.ten_bit ? NV_ENC_HEVC_PROFILE_MAIN10_GUID : NV_ENC_HEVC_PROFILE_MAIN_GUID;
         } else if (config_.codec == Codec::Av1) {
             codec_guid = NV_ENC_CODEC_AV1_GUID;
             profile_guid = NV_ENC_AV1_PROFILE_MAIN_GUID;
@@ -320,9 +323,14 @@ private:
                 v.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
                 v.videoFullRangeFlag = 0;
                 v.colourDescriptionPresentFlag = 1;
-                v.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-                v.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-                v.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                v.colourPrimaries = config_.ten_bit ? NV_ENC_VUI_COLOR_PRIMARIES_BT2020 : NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+                v.transferCharacteristics = config_.ten_bit ? NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084
+                                                            : NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+                v.colourMatrix = config_.ten_bit ? NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL : NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                if (config_.ten_bit) {
+                    h.inputBitDepth = NV_ENC_BIT_DEPTH_10;
+                    h.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+                }
                 break;
             }
             case Codec::Av1: {
@@ -332,9 +340,14 @@ private:
                 a.enableIntraRefresh = intra_refresh_ ? 1 : 0;
                 a.intraRefreshPeriod = intra_refresh_ ? config_.fps * 3600 : 0;
                 a.intraRefreshCnt = intra_refresh_ ? refresh_frames() : 0;
-                a.colorPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-                a.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-                a.matrixCoefficients = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                a.colorPrimaries = config_.ten_bit ? NV_ENC_VUI_COLOR_PRIMARIES_BT2020 : NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+                a.transferCharacteristics = config_.ten_bit ? NV_ENC_VUI_TRANSFER_CHARACTERISTIC_SMPTE2084
+                                                            : NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+                a.matrixCoefficients = config_.ten_bit ? NV_ENC_VUI_MATRIX_COEFFS_BT2020_NCL : NV_ENC_VUI_MATRIX_COEFFS_BT709;
+                if (config_.ten_bit) {
+                    a.inputBitDepth = NV_ENC_BIT_DEPTH_10;
+                    a.outputBitDepth = NV_ENC_BIT_DEPTH_10;
+                }
                 a.colorRange = 0;
                 break;
             }

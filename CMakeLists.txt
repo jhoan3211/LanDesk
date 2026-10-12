@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.25)
 
 project(LanCast
-    VERSION 1.3.0
+    VERSION 1.4.0
     DESCRIPTION "Escritorio remoto y streaming de pantalla de baja latencia para LAN"
     LANGUAGES CXX)
 
@@ -19,6 +19,13 @@ option(LANCAST_BUILD_TESTS "Compilar las pruebas unitarias" ON)
 option(LANCAST_WARNINGS_AS_ERRORS "Tratar advertencias como errores" ON)
 
 include(cmake/CompilerWarnings.cmake)
+
+# Release con símbolos (LanCast.pdb aparte): permite leer los volcados de memoria de un cierre inesperado.
+# /OPT:REF e /OPT:ICF mantienen el .exe igual de chico que sin /DEBUG.
+if(MSVC)
+    add_compile_options($<$<CONFIG:Release>:/Zi>)
+    add_link_options($<$<CONFIG:Release>:/DEBUG:FULL> $<$<CONFIG:Release>:/OPT:REF> $<$<CONFIG:Release>:/OPT:ICF>)
+endif()
 
 add_subdirectory(lancast-core)
 add_subdirectory(lancast-platform)

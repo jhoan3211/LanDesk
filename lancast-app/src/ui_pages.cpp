@@ -14,6 +14,8 @@
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
+#include "lancast/platform/crash.hpp"
+#include "lancast/platform/signature.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/platform.hpp"
 #include "lancast/platform/system.hpp"
@@ -235,16 +237,26 @@ void App::draw_stream_settings(bool live) {
         // FPS
         row("FPS");
         static const int kFps[] = {30, 60, 90, 120, 144, 165, 240};
-        if (ImGui::BeginCombo("##fps", std::to_string(s.fps).c_str())) {
+        const std::string fps_label =
+            s.fps_match_display ? std::format("Igual a esta pantalla ({} Hz)", display_hz()) : std::to_string(s.fps);
+        if (ImGui::BeginCombo("##fps", fps_label.c_str())) {
+            if (ImGui::Selectable(std::format("Igual a esta pantalla ({} Hz)", display_hz()).c_str(), s.fps_match_display)) {
+                s.fps_match_display = true;
+                changed = true;
+            }
             for (const int f : kFps) {
-                if (ImGui::Selectable(std::to_string(f).c_str(), static_cast<int>(s.fps) == f)) {
+                if (ImGui::Selectable(std::to_string(f).c_str(), !s.fps_match_display && static_cast<int>(s.fps) == f)) {
                     s.fps = static_cast<std::uint32_t>(f);
+                    s.fps_match_display = false;
                     changed = true;
                 }
             }
             int custom = static_cast<int>(s.fps);
             ImGui::SetNextItemWidth(120 * scale_);
-            if (ImGui::InputInt("Personalizado", &custom, 1, 10)) s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
+            if (ImGui::InputInt("Personalizado", &custom, 1, 10)) {
+                s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
+                s.fps_match_display = false;
+            }
             if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
             ImGui::EndCombo();
         }
@@ -271,7 +283,7 @@ void App::draw_stream_settings(bool live) {
             const Size req = requested_size(s, backbuffer_size_.width ? Size{2560, 1440} : Size{1920, 1080});
             const Codec c = s.codec == CodecChoice::H264 ? Codec::H264 : Codec::Hevc;
             ImGui::SameLine();
-            ImGui::TextColored(kMuted, "≈ %u Mbps", auto_bitrate_mbps(req.width, req.height, s.fps, c));
+            ImGui::TextColored(kMuted, "≈ %u Mbps", auto_bitrate_mbps(req.width, req.height, requested_fps(s), c));
         } else {
             int mbps = static_cast<int>(s.bitrate_mbps);
             ImGui::AlignTextToFramePadding();
@@ -297,6 +309,9 @@ void App::draw_stream_settings(bool live) {
         ImGui::SameLine();
         if (ImGui::RadioButton("4:4:4", &chroma, 1)) changed = true;
         s.chroma_444 = chroma == 1;
+        help("4:4:4 guarda el color de cada píxel: texto e íconos nítidos, sin bordes de color (ideal para trabajar). "
+             "Funciona con cualquier códec, pero el host codifica el doble de píxeles: si su GPU no da abasto, el ajuste "
+             "automático bajará la resolución.");
 
         row("Color");
         int hdr = s.hdr ? 1 : 0;
@@ -304,6 +319,9 @@ void App::draw_stream_settings(bool live) {
         ImGui::SameLine();
         if (ImGui::RadioButton("10 bits HDR", &hdr, 1)) changed = true;
         s.hdr = hdr == 1;
+        help("Requiere el monitor del host en modo HDR (Configuración → Pantalla → Usar HDR), GPU AMD o NVIDIA en el host "
+             "y HEVC o AV1. En una pantalla HDR se ve en HDR; en una SDR se adapta (tone mapping). Si algo falta, se usa "
+             "SDR y se avisa.");
 
         row("Escalado");
         int sc = static_cast<int>(s.scaling);
@@ -332,6 +350,10 @@ void App::draw_stream_settings(bool live) {
         if (ImGui::Checkbox("Por slices (sub-frame)##sl", &s.slices)) changed = true;
         help("El cuadro se envía en partes a medida que el codificador las termina: la red trabaja en paralelo "
              "con la codificación. Solo si la GPU del host lo soporta.");
+        row("Ajuste automático");
+        if (ImGui::Checkbox("##adaptive", &s.adaptive)) changed = true;
+        help("Si el codificador del host tarda más que el tiempo entre cuadros, baja la resolución (hasta 720p) "
+             "y luego los FPS, para que la latencia no crezca. Se avisa con un mensaje.");
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();
@@ -443,6 +465,9 @@ void App::draw_host_page() {
                         st.stream->height, st.stream->fps, st.stream->bitrate_kbps / 1000, st.encoder_name.c_str());
             ImGui::Text("Enviando %.0f fps · %.1f Mbps · captura+codificación %.1f ms", st.stats.fps, st.stats.bitrate_mbps,
                         st.stats.capture_to_encoded_ms);
+            if (st.stats.skipped_percent >= 1.0) {
+                ImGui::TextColored(kWarn, "El codificador no da abasto: %.0f %% de cuadros saltados", st.stats.skipped_percent);
+            }
         }
         if (danger_button("Desconectar")) host_.disconnect();
         ImGui::SameLine();
@@ -653,6 +678,14 @@ void App::draw_settings_page() {
 
     section("Cliente");
     changed |= ImGui::Checkbox("Modo solo ver (no enviar mouse ni teclado)", &settings_.client.view_only);
+    changed |= ImGui::Checkbox("Barra del stream oculta (arriba solo aparece una flecha pequeña)",
+                               &settings_.client.toolbar_collapsed);
+    int tab = static_cast<int>(settings_.client.toolbar_tab_percent);
+    ImGui::SetNextItemWidth(220 * scale_);
+    if (ImGui::SliderInt("Tamaño de la ✕ y la flecha de la barra", &tab, 50, 300, "%d %%")) {
+        settings_.client.toolbar_tab_percent = static_cast<std::uint32_t>(tab);
+        changed = true;
+    }
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.client.clipboard_sync);
     int loss = static_cast<int>(settings_.client.simulate_loss_percent);
     ImGui::SetNextItemWidth(220 * scale_);
@@ -715,6 +748,32 @@ void App::draw_diagnostics_page() {
         ImGui::SetClipboardText(format_report_text(*report_, true).c_str());
         toast("Copiado");
     }
+
+    // Firma digital de este ejecutable.
+    static const sig::Info self_sig = sig::verify(sys::exe_path());
+    if (self_sig.valid) {
+        ImGui::TextColored(kGood, "Firma digital válida: %s", self_sig.subject.c_str());
+    } else {
+        ImGui::TextColored(kMuted, "Ejecutable %s%s", self_sig.error.c_str(),
+                           self_sig.subject.empty() ? "" : (" (" + self_sig.subject + ")").c_str());
+    }
+
+    // Cierres inesperados: volcados de memoria guardados por esta app.
+    const auto dumps_dir = sys::app_data_dir() / L"crashes";
+    const auto dumps = crash::list(dumps_dir);
+    if (!dumps.empty()) {
+        section("Cierres inesperados");
+        ImGui::TextWrapped("LanCast guardó un informe (volcado de memoria) de cada cierre inesperado. Sirve para encontrar "
+                           "el error: compártelo solo con quien lo vaya a analizar, porque contiene memoria del programa.");
+        for (std::size_t i = 0; i < std::min<std::size_t>(dumps.size(), 5); ++i) {
+            std::error_code ec;
+            const auto bytes = std::filesystem::file_size(dumps[i], ec);
+            ImGui::BulletText("%s  (%s)", detail::narrow(dumps[i].filename().wstring()).c_str(), human_bytes(bytes).c_str());
+        }
+        if (ImGui::Button("Abrir carpeta de informes")) sys::open_in_explorer(dumps_dir);
+        ImGui::Separator();
+    }
+
     if (!report_) return;
     ImGui::BeginChild("##report", ImVec2(0, 0), ImGuiChildFlags_Borders);
     ImGui::TextUnformatted(format_report_text(*report_, false).c_str());

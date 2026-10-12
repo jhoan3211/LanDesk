@@ -499,11 +499,15 @@ platform::Result<std::unique_ptr<Encoder>> create_nvenc_encoder(const gpu::Devic
 
 platform::Result<std::unique_ptr<Encoder>> create_encoder(const gpu::Device& device, const EncoderConfig& config) {
     // 1) API directa del fabricante (menor latencia, más opciones); 2) Media Foundation como respaldo.
+    if (config.ten_bit && device.vendor != GpuVendor::Amd && device.vendor != GpuVendor::Nvidia) {
+        return std::unexpected(platform::Error{"HDR de 10 bits requiere una GPU AMD o NVIDIA (codificador directo)", 0});
+    }
     if (config.direct) {
         platform::Result<std::unique_ptr<Encoder>> direct = std::unexpected(platform::Error{"sin codificador directo", 0});
         if (device.vendor == GpuVendor::Amd) direct = create_amf_encoder(device, config);
         if (device.vendor == GpuVendor::Nvidia) direct = create_nvenc_encoder(device, config);
         if (direct) return direct;
+        if (config.ten_bit) return direct;  // Media Foundation no se usa para 10 bits.
         if (device.vendor == GpuVendor::Amd || device.vendor == GpuVendor::Nvidia) {
             log::warn("Codificador directo no disponible ({}); se usa Media Foundation", direct.error().message());
         }

@@ -33,8 +33,8 @@ public:
     Streamer(const Streamer&) = delete;
     Streamer& operator=(const Streamer&) = delete;
 
-    void configure(const proto::StreamConfig& config, const std::vector<Codec>& client_decoders,
-                   std::uint32_t audio_rate, std::uint8_t audio_channels, bool client_slices);
+    void configure(const proto::StreamConfig& config, const proto::ClientCaps& client, std::uint32_t audio_rate,
+                   std::uint8_t audio_channels);
     void request_keyframe() noexcept { keyframe_requested_ = true; }
     // Pérdida de un cuadro: si el stream usa intra-refresh se repara con una ola de refresco; si no, keyframe.
     void request_recovery(proto::RecoveryReason reason) noexcept {
@@ -70,11 +70,20 @@ private:
     std::atomic<bool> keyframe_requested_{true};
     std::atomic<bool> refresh_requested_{false};
 
+    // Ajuste automático: cuando el codificador no da abasto se reconstruye con menos resolución o FPS.
+    std::atomic<bool> adapt_requested_{false};
+    double adapt_scale_ = 1.0;       // Solo lo usa el hilo de captura.
+    std::uint32_t adapt_fps_ = 0;    // 0 = sin límite.
+    std::string adapt_reason_;
+    int overload_windows_ = 0;       // Ventanas de 1 s seguidas con sobrecarga (protegido por mutex_).
+    std::uint64_t adapt_hold_until_us_ = 0;
+    std::uint64_t window_skipped_ = 0;
+    std::uint64_t window_interval_us_ = 0;
+
     mutable std::mutex mutex_;
     std::condition_variable cv_;
     std::optional<proto::StreamConfig> pending_;
-    std::vector<Codec> client_decoders_;
-    bool client_slices_ = false;
+    proto::ClientCaps client_;
     std::uint32_t audio_rate_ = 0;
     std::uint8_t audio_channels_ = 0;
     std::optional<proto::StreamStarted> current_;

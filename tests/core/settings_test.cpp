@@ -141,3 +141,21 @@ TEST(Geometry, HiDpiScaledWindow) {
     EXPECT_NEAR(n->x, 0.5f, 1e-3f);
     EXPECT_NEAR(n->y, 0.5f, 1e-3f);
 }
+
+TEST(Settings, MigratesOldConfigToMatchDisplay) {
+    // Configuración de la 1.3 (sin defaults_version) con 1440p fijo: pasa a "Igual a esta pantalla".
+    const auto old = lancast::settings_from_toml("[client.stream]\nresolution = \"1440p\"\nfps = 165\n");
+    EXPECT_EQ(old.client.stream.resolution, lancast::ResolutionPreset::ClientNative);
+    EXPECT_TRUE(old.client.stream.fps_match_display);
+    EXPECT_EQ(old.defaults_version, lancast::kDefaultsVersion);
+
+    // Una elección hecha con la 1.4 se respeta.
+    const auto now = lancast::settings_from_toml("defaults_version = 2\n[client.stream]\nresolution = \"1440p\"\nfps = 165\n");
+    EXPECT_EQ(now.client.stream.resolution, lancast::ResolutionPreset::R1440);
+    EXPECT_FALSE(now.client.stream.fps_match_display);
+    EXPECT_EQ(now.client.stream.fps, 165u);
+
+    // Ida y vuelta conserva la opción.
+    const auto again = lancast::settings_from_toml(lancast::settings_to_toml(old));
+    EXPECT_TRUE(again.client.stream.fps_match_display);
+}

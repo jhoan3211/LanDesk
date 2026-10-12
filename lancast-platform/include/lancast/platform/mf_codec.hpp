@@ -37,6 +37,7 @@ struct EncoderConfig {
     bool direct = true;         // Usar NVENC/AMF directamente si la GPU lo permite (si no, Media Foundation).
     bool intra_refresh = false; // Recuperación por intra-refresh continuo en vez de keyframes completos.
     bool slices = false;        // Entregar el frame por slices a medida que se codifican (envío sub-frame).
+    bool ten_bit = false;       // HDR: entrada P010 BT.2020 PQ, HEVC Main10 / AV1 10 bits (solo AMF y NVENC directos).
 };
 
 struct EncodedPacket {
@@ -96,7 +97,9 @@ public:
     [[nodiscard]] virtual std::string name() const = 0;
 };
 
-[[nodiscard]] platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size);
+// ten_bit: el stream es de 10 bits (HDR): salida P010 en vez de NV12.
+[[nodiscard]] platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size,
+                                                                        bool ten_bit = false);
 
 // Códecs que este equipo puede decodificar (MFT de Windows con aceleración por hardware).
 [[nodiscard]] std::vector<Codec> available_decoders();

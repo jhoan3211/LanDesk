@@ -37,9 +37,10 @@ DesktopCapture::~DesktopCapture() = default;
 
 platform::Result<std::unique_ptr<DesktopCapture>> DesktopCapture::create(const gpu::Device& device,
                                                                          const std::vector<Rect>& monitor_rects,
-                                                                         const Rect& source) {
+                                                                         const Rect& source, bool hdr) {
     std::unique_ptr<DesktopCapture> cap{new DesktopCapture()};
     cap->device_ = device;
+    cap->hdr_ = hdr;
     cap->monitor_rects_ = monitor_rects;
     cap->source_ = source;
     if (auto r = cap->init_outputs(); !r) return std::unexpected(r.error());
@@ -64,9 +65,10 @@ platform::Result<void> DesktopCapture::init_outputs() {
         HRESULT hr = E_NOINTERFACE;
         gpu::ComPtr<IDXGIOutput5> output5;
         if (SUCCEEDED(output.As(&output5))) {
-            const DXGI_FORMAT formats[] = {DXGI_FORMAT_B8G8R8A8_UNORM};
+            const DXGI_FORMAT formats[] = {format()};
             hr = output5->DuplicateOutput1(device_.device.Get(), 0, 1, formats, &out->duplication);
         }
+        if (FAILED(hr) && hdr_) return platform::detail::hr_error("Captura HDR (FP16) no disponible", hr);
         if (FAILED(hr)) {
             gpu::ComPtr<IDXGIOutput1> output1;
             if (SUCCEEDED(output.As(&output1))) hr = output1->DuplicateOutput(device_.device.Get(), &out->duplication);
@@ -97,7 +99,7 @@ platform::Result<void> DesktopCapture::init_outputs() {
         rotation_ = 0;
     }
     if (!composite_ || texture_size_ != size) {
-        auto tex = gpu::create_texture(device_.device.Get(), size.width, size.height, DXGI_FORMAT_B8G8R8A8_UNORM,
+        auto tex = gpu::create_texture(device_.device.Get(), size.width, size.height, format(),
                                        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
         if (!tex) return std::unexpected(tex.error());
         composite_ = *tex;

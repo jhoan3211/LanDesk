@@ -21,6 +21,7 @@
 #include "lancast/core/log.hpp"
 #include "lancast/core/report.hpp"
 #include "lancast/core/version.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
 #include "lancast/platform/platform.hpp"
@@ -87,6 +88,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
             opts.connect = narrow(argv[++i]);
         } else if (a == L"--pin" && i + 1 < argc) {
             opts.pin = narrow(argv[++i]);
+        } else if (a == L"--crash-test") {
+            opts.crash_test = true;
         } else if (a == L"--service") {
             LocalFree(argv);
             return lancast::service::run_service();
@@ -120,6 +123,8 @@ int WINAPI wWinMain(HINSTANCE, HINSTANCE, PWSTR, int) {
     lancast::platform::enable_per_monitor_dpi_awareness();
     lancast::log::set_file(lancast::sys::app_data_dir() / (opts.no_host ? L"lancast-client.log" : L"lancast.log"));
     lancast::log::info("LanCast {} iniciado", lancast::kAppVersion);
+    lancast::crash::install(lancast::sys::app_data_dir() / L"crashes", "app");
+    if (opts.crash_test) lancast::crash::crash_for_test();
     timeBeginPeriod(1);  // Temporizadores de 1 ms para el ritmo de captura y presentación.
 
     int code = 0;

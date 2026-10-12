@@ -22,11 +22,67 @@ using namespace ui;
 
 // ------------------------------------------------------------------------------------------------ durante el stream
 
+App::TabResult App::draw_toolbar_tab(bool close_icon, float y) {
+    const float k = scale_ * static_cast<float>(settings_.client.toolbar_tab_percent) / 100.0f;
+    const ImVec2 size(46.0f * k, 22.0f * k);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + (vp->Size.x - size.x) * 0.5f, vp->Pos.y + y), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(size, ImGuiCond_Always);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowMinSize, ImVec2(1, 1));
+    ImGui::Begin(close_icon ? "##tab_close" : "##tab_show", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoBackground | ImGuiWindowFlags_NoNav);
+    TabResult r;
+    r.clicked = ImGui::InvisibleButton("##tab", size);
+    r.hovered = ImGui::IsItemHovered();
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 p0 = ImGui::GetItemRectMin();
+    const ImVec2 p1 = ImGui::GetItemRectMax();
+    const ImU32 bg = r.hovered ? (close_icon ? IM_COL32(205, 60, 60, 245) : IM_COL32(55, 115, 215, 245)) : IM_COL32(28, 30, 36, 235);
+    dl->AddRectFilled(p0, p1, bg, size.y * 0.45f, ImDrawFlags_RoundCornersBottom);
+    const ImVec2 c((p0.x + p1.x) * 0.5f, (p0.y + p1.y) * 0.5f);
+    const float h = size.y * 0.24f;
+    const float thick = std::max(1.5f, size.y * 0.09f);
+    const ImU32 fg = IM_COL32(236, 236, 242, 255);
+    if (close_icon) {
+        dl->AddLine(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), fg, thick);
+        dl->AddLine(ImVec2(c.x - h, c.y + h), ImVec2(c.x + h, c.y - h), fg, thick);
+    } else {
+        // Flecha hacia abajo: "aquí está la barra".
+        const ImVec2 tip(c.x, c.y + h * 0.7f);
+        dl->AddLine(ImVec2(c.x - h * 1.4f, c.y - h * 0.6f), tip, fg, thick);
+        dl->AddLine(ImVec2(c.x + h * 1.4f, c.y - h * 0.6f), tip, fg, thick);
+    }
+    ImGui::SetItemTooltip(close_icon ? "Ocultar la barra: ya no aparecerá al pasar el mouse (queda solo este ícono)"
+                                     : "Mostrar la barra");
+    ImGui::End();
+    ImGui::PopStyleVar(3);
+    return r;
+}
+
 void App::draw_stream_toolbar() {
     // Aparece al llevar el mouse al borde superior de la ventana (como en otros escritorios remotos).
     const std::uint64_t now = gpu::now_us();
     const ImGuiIO& io = ImGui::GetIO();
-    if (io.MousePos.y >= 0 && io.MousePos.y < 6.0f * scale_ && ImGui::IsMousePosValid()) toolbar_until_us_ = now + 1'500'000;
+    const bool at_top = ImGui::IsMousePosValid() && io.MousePos.y >= 0 && io.MousePos.y < 6.0f * scale_;
+    if (settings_.client.toolbar_collapsed) {
+        // Barra oculta con la ✕: arriba solo aparece un ícono pequeño en el centro; al pulsarlo vuelve la barra.
+        if (show_menu_) return;
+        if (at_top) toolbar_tab_until_us_ = now + 1'500'000;
+        if (now > toolbar_tab_until_us_) return;
+        const TabResult tab = draw_toolbar_tab(false, 0.0f);
+        if (tab.hovered) toolbar_tab_until_us_ = now + 1'500'000;
+        if (tab.clicked) {
+            settings_.client.toolbar_collapsed = false;
+            save_settings();
+            toolbar_until_us_ = now + 2'500'000;
+            toolbar_tab_until_us_ = 0;
+        }
+        return;
+    }
+    if (at_top) toolbar_until_us_ = now + 1'500'000;
     if (now > toolbar_until_us_ && !show_menu_) return;
     if (show_menu_) return;  // El menú completo ya está abierto.
 
@@ -52,11 +108,16 @@ void App::draw_stream_toolbar() {
 
     // Resolución
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(130 * scale_);
-    if (ImGui::BeginCombo("##tres", std::string{to_string(s.resolution)}.c_str())) {
+    const Size here = display_size();
+    auto res_label = [&](ResolutionPreset r) {
+        return r == ResolutionPreset::ClientNative ? std::format("Igual a esta pantalla ({}x{})", here.width, here.height)
+                                                   : std::string{to_string(r)};
+    };
+    ImGui::SetNextItemWidth(200 * scale_);
+    if (ImGui::BeginCombo("##tres", res_label(s.resolution).c_str())) {
         for (int i = 0; i < static_cast<int>(ResolutionPreset::Custom); ++i) {
             const auto r = static_cast<ResolutionPreset>(i);
-            if (ImGui::Selectable(std::string{to_string(r)}.c_str(), s.resolution == r)) {
+            if (ImGui::Selectable(res_label(r).c_str(), s.resolution == r)) {
                 s.resolution = r;
                 changed = true;
             }
@@ -67,16 +128,24 @@ void App::draw_stream_toolbar() {
 
     // FPS
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(80 * scale_);
-    if (ImGui::BeginCombo("##tfps", std::format("{} fps", s.fps).c_str())) {
+    const std::uint32_t here_hz = display_hz();
+    ImGui::SetNextItemWidth(110 * scale_);
+    const std::string fps_label = s.fps_match_display ? std::format("{} fps (pantalla)", std::max(here_hz, 30u)) : std::format("{} fps", s.fps);
+    if (ImGui::BeginCombo("##tfps", fps_label.c_str())) {
+        if (ImGui::Selectable(std::format("Igual a esta pantalla ({} Hz)", here_hz).c_str(), s.fps_match_display)) {
+            s.fps_match_display = true;
+            changed = true;
+        }
         for (const std::uint32_t f : {30u, 60u, 90u, 120u, 144u, 165u, 240u}) {
-            if (ImGui::Selectable(std::format("{} fps", f).c_str(), s.fps == f)) {
+            if (ImGui::Selectable(std::format("{} fps", f).c_str(), !s.fps_match_display && s.fps == f)) {
                 s.fps = f;
+                s.fps_match_display = false;
                 changed = true;
             }
         }
         ImGui::EndCombo();
     }
+    ImGui::SetItemTooltip("Más FPS que los Hz de esta pantalla no se ven, pero cargan al codificador del host");
 
     // Monitor
     ImGui::SameLine();
@@ -195,7 +264,19 @@ void App::draw_stream_toolbar() {
         ImGui::IsPopupOpen(nullptr, ImGuiPopupFlags_AnyPopupId)) {
         toolbar_until_us_ = now + 1'500'000;
     }
+    const float bar_bottom = ImGui::GetWindowPos().y + ImGui::GetWindowSize().y - ImGui::GetMainViewport()->Pos.y;
     ImGui::End();
+
+    // ✕ que sobresale en el centro, debajo de la barra: la esconde hasta que se pulse el ícono de arriba.
+    const TabResult close = draw_toolbar_tab(true, bar_bottom);
+    if (close.hovered) toolbar_until_us_ = now + 1'500'000;
+    if (close.clicked) {
+        settings_.client.toolbar_collapsed = true;
+        save_settings();
+        toolbar_until_us_ = 0;
+        toolbar_tab_until_us_ = now + 1'500'000;
+        toast("Barra oculta. Lleva el mouse arriba y pulsa la flecha del centro para volver a mostrarla");
+    }
 
     if (changed) {
         settings_.client.active_profile.clear();
@@ -295,8 +376,9 @@ void App::draw_stats_overlay() {
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoInputs |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoNav);
     if (stream) {
-        ImGui::TextColored(kAccent, "%s %ux%u @ %u fps · %u Mbps", std::string{to_string(stream->codec)}.c_str(), stream->width,
-                           stream->height, stream->fps, stream->bitrate_kbps / 1000);
+        ImGui::TextColored(kAccent, "%s %ux%u @ %u fps · %u Mbps%s%s", std::string{to_string(stream->codec)}.c_str(),
+                           stream->width, stream->height, stream->fps, stream->bitrate_kbps / 1000,
+                           stream->chroma_444 ? " · 4:4:4" : "", stream->hdr ? (hdr_output_ ? " · HDR" : " · HDR→SDR") : "");
     }
     ImGui::Text("FPS: %.0f   Bitrate: %.1f Mbps", s.fps, s.bitrate_mbps);
     ImGui::Separator();

@@ -15,6 +15,7 @@
 #include "imgui_impl_win32.h"
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
+#include "lancast/platform/crash.hpp"
 #include "lancast/platform/input.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/platform.hpp"
@@ -205,7 +206,10 @@ void App::resize_swapchain(UINT width, UINT height) {
     device_.context->OMSetRenderTargets(0, nullptr, nullptr);
     device_.context->ClearState();
     device_.context->Flush();
-    const HRESULT hr = swapchain_->ResizeBuffers(0, width, height, DXGI_FORMAT_UNKNOWN,
+    ui_rtv_.Reset();
+    ui_srv_.Reset();
+    ui_tex_.Reset();
+    const HRESULT hr = swapchain_->ResizeBuffers(0, width, height, swap_format_,
                                                  tearing_supported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0);
     if (FAILED(hr)) {
         log::error("ResizeBuffers falló (0x{:08X}) al cambiar a {}x{}", static_cast<std::uint32_t>(hr), width, height);
@@ -285,6 +289,11 @@ int App::run() {
     if (options_.connect) start_connect(*options_.connect);
     std::thread([] { update::cleanup_previous(); }).detach();  // Borra el .old de una actualización anterior.
     if (settings_.check_updates) check_updates(false);
+    if (const auto dump = crash::unseen(sys::app_data_dir() / L"crashes")) {
+        toast("LanCast se cerró inesperadamente la última vez. Se guardó un informe: Diagnóstico → Cierres inesperados");
+        crash::mark_seen(sys::app_data_dir() / L"crashes");
+        log::warn("Volcado de un cierre anterior: {}", detail::narrow(dump->wstring()));
+    }
 
     std::uint64_t last_host_poll = 0;
     while (running_) {
@@ -370,6 +379,10 @@ int App::run() {
             settings_dirty_ = false;
         }
         poll_service_action();
+        if (now - display_checked_us_ > 1'000'000) {
+            display_checked_us_ = now;
+            follow_display();
+        }
         if (!service_busy_ && now - service_checked_us_ > 5'000'000) {
             service_checked_us_ = now;
             refresh_service_status();
@@ -408,9 +421,11 @@ void App::render() {
     const std::uint64_t now = gpu::now_us();
     // En "solo ver" el cursor remoto se dibuja encima, así que hay que redibujar aunque no llegue video.
     const bool ui_active = !streaming() || show_menu_ || show_stats_ || pin_modal_open_ || now < toast_until_us_ ||
-                           now < toolbar_until_us_ || !control_enabled();
+                           now < toolbar_until_us_ || now < toolbar_tab_until_us_ || !control_enabled();
     if (streaming() && !new_video && !ui_active && now - last_present_us_ < 100'000 && frame_presented_since_stream_) return;
     if (streaming() && !new_video && now - last_present_us_ < 8'000) return;  // Máx. ~120 Hz de interfaz sin video.
+
+    update_hdr_output(false);
 
     const std::uint64_t t0 = gpu::now_us();
     ImGui_ImplDX11_NewFrame();
@@ -426,9 +441,11 @@ void App::render() {
     if (streaming() && renderer_ && renderer_->has_picture()) {
         const auto stream = session_->stream();
         const Rect view = view_rect({stream->width, stream->height}, backbuffer_size_, settings_.client.stream.scaling);
-        drew_video = renderer_->draw(bb.Get(), backbuffer_size_, view);
-        // Medición de latencia: ¿ya se ve en la imagen el color que pintó el host?
-        if (drew_video) {
+        drew_video = renderer_->draw(bb.Get(), backbuffer_size_, view,
+                                     VideoRenderer::Output{rtv_.Get(), hdr_output_, display_color_.sdr_white_nits,
+                                                           display_color_.peak_nits});
+        // Medición de latencia: ¿ya se ve en la imagen el color que pintó el host? (no en salida HDR: FP16)
+        if (drew_video && !hdr_output_) {
             if (const auto target = session_->latency_target()) {
                 latency_seen = sample_matches(bb.Get(), view, *target);
             }
@@ -439,9 +456,19 @@ void App::render() {
         const float black[4] = {0, 0, 0, 1};
         device_.context->ClearRenderTargetView(rtv_.Get(), streaming() ? black : bg);
     }
-    ID3D11RenderTargetView* rtv = rtv_.Get();
-    device_.context->OMSetRenderTargets(1, &rtv, nullptr);
-    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    if (hdr_output_ && ensure_ui_target()) {
+        // La interfaz se dibuja aparte (8 bits, con gamma) y se compone sobre el video HDR al brillo SDR de Windows.
+        const float clear[4] = {0, 0, 0, 0};
+        device_.context->ClearRenderTargetView(ui_rtv_.Get(), clear);
+        ID3D11RenderTargetView* ui = ui_rtv_.Get();
+        device_.context->OMSetRenderTargets(1, &ui, nullptr);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+        ui_compositor_->draw(ui_srv_.Get(), rtv_.Get(), backbuffer_size_, display_color_.sdr_white_nits);
+    } else {
+        ID3D11RenderTargetView* rtv = rtv_.Get();
+        device_.context->OMSetRenderTargets(1, &rtv, nullptr);
+        ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    }
 
     const bool vsync = !streaming() || settings_.client.stream.vsync;
     UINT flags = 0;
@@ -484,6 +511,47 @@ bool App::sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const cl
     return target.white ? luma > 190 : luma < 60;
 }
 
+void App::update_hdr_output(bool force) {
+    const std::uint64_t now = gpu::now_us();
+    const auto stream = streaming() ? session_->stream() : std::nullopt;
+    const std::uint16_t epoch = stream ? stream->epoch : 0xFFFF;
+    if (!force && epoch == hdr_checked_epoch_ && now - hdr_checked_us_ < 1'000'000) return;
+    hdr_checked_us_ = now;
+    hdr_checked_epoch_ = epoch;
+    display_color_ = gpu::display_color(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST));
+    const bool want = stream && stream->hdr && display_color_.hdr;
+    if (want == hdr_output_) return;
+
+    hdr_output_ = want;
+    swap_format_ = want ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+    resize_swapchain(backbuffer_size_.width, backbuffer_size_.height);
+    Microsoft::WRL::ComPtr<IDXGISwapChain3> sc3;
+    if (SUCCEEDED(swapchain_.As(&sc3))) {
+        sc3->SetColorSpace1(want ? DXGI_COLOR_SPACE_RGB_FULL_G10_NONE_P709 : DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709);
+    }
+    log::info("Salida {}: blanco SDR {:.0f} nits, pico {:.0f} nits", want ? "HDR (scRGB)" : "SDR", display_color_.sdr_white_nits,
+              display_color_.peak_nits);
+    if (want) toast("Salida HDR activada");
+}
+
+bool App::ensure_ui_target() {
+    if (!ui_compositor_) {
+        auto c = gpu::UiCompositor::create(device_);
+        if (!c) {
+            log::error("Composición de la interfaz HDR: {}", c.error().message());
+            return false;
+        }
+        ui_compositor_ = std::move(*c);
+    }
+    if (ui_tex_) return true;
+    auto tex = gpu::create_texture(device_.device.Get(), backbuffer_size_.width, backbuffer_size_.height,
+                                   DXGI_FORMAT_B8G8R8A8_UNORM, D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+    if (!tex) return false;
+    ui_tex_ = *tex;
+    return SUCCEEDED(device_.device->CreateRenderTargetView(ui_tex_.Get(), nullptr, &ui_rtv_)) &&
+           SUCCEEDED(device_.device->CreateShaderResourceView(ui_tex_.Get(), nullptr, &ui_srv_));
+}
+
 void App::update_presentation_mode() {
     last_presentation_check_us_ = last_present_us_;
     Microsoft::WRL::ComPtr<IDXGISwapChainMedia> media;
@@ -506,7 +574,10 @@ void App::apply_min_latency() {
             for (const auto& m : info->monitors) {
                 if (s.monitor_id == 0 || m.id == s.monitor_id) hz = std::max(hz, m.refresh_hz);
             }
-            if (hz >= 30) s.fps = hz;
+            if (hz >= 30) {
+                s.fps = hz;
+                s.fps_match_display = false;
+            }
         }
     }
     settings_.client.active_profile.clear();

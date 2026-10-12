@@ -27,6 +27,7 @@ struct StreamSettings {
     std::uint32_t custom_width = 1920;
     std::uint32_t custom_height = 1080;
     std::uint32_t fps = 60;
+    bool fps_match_display = true;  // FPS = frecuencia del monitor donde está la ventana del cliente.
     CodecChoice codec = CodecChoice::Auto;
     bool auto_bitrate = true;
     std::uint32_t bitrate_mbps = 50;
@@ -46,6 +47,7 @@ struct StreamSettings {
     // decodificadores de Windows, un keyframe recupera antes (descartan cuadros durante la ola de refresco).
     bool intra_refresh = false;
     bool slices = true;         // Envío por slices: la red empieza antes de que termine de codificarse el cuadro.
+    bool adaptive = true;       // El host baja resolución/FPS solo si su codificador no da abasto.
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;
 };
@@ -82,7 +84,13 @@ struct ClientSettings {
     bool relative_mouse = false;
     bool show_stats = false;
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
+    // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.
+    bool toolbar_collapsed = false;
+    std::uint32_t toolbar_tab_percent = 100;
 };
+
+// 2 (1.4): resolución y FPS "Igual a esta pantalla" por defecto.
+inline constexpr std::uint32_t kDefaultsVersion = 2;
 
 struct AppSettings {
     std::string device_id;    // 16 bytes aleatorios en hex; identifica este equipo al emparejar.
@@ -90,6 +98,8 @@ struct AppSettings {
     bool start_with_windows = false;
     bool minimize_to_tray = true;
     bool check_updates = true;  // Buscar versiones nuevas en GitHub al iniciar.
+    // Versión de los valores por defecto aplicados (migraciones únicas al actualizar LanCast).
+    std::uint32_t defaults_version = kDefaultsVersion;
     HostSettings host;
     ClientSettings client;
 };

@@ -17,6 +17,7 @@
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/settings.hpp"
 #include "lancast/host/host_service.hpp"
+#include "lancast/platform/color.hpp"
 #include "lancast/platform/d3d.hpp"
 #include "lancast/platform/service.hpp"
 #include "lancast/platform/system.hpp"
@@ -31,6 +32,7 @@ namespace lancast::app {
 struct LaunchOptions {
     bool minimized = false;
     bool no_host = false;            // Solo cliente (útil para probar dos instancias en el mismo equipo).
+    bool crash_test = false;         // Provoca un cierre inesperado (prueba de los volcados de memoria).
     std::optional<std::string> connect;  // Conectar al iniciar.
     std::optional<std::string> pin;      // PIN para --connect (pruebas automatizadas).
     bool measure_latency = false;        // Medir la latencia real al conectar (pruebas).
@@ -79,7 +81,15 @@ private:
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
     void apply_min_latency();
+    // Resolución y frecuencia del monitor donde está la ventana del cliente.
+    [[nodiscard]] Size display_size() const;
+    [[nodiscard]] std::uint32_t display_hz() const;
+    [[nodiscard]] std::uint32_t requested_fps(const StreamSettings& s) const;
+    void follow_display();
     void update_presentation_mode();
+    // Pantalla HDR + stream HDR: back buffer scRGB (FP16) y la interfaz compuesta al brillo SDR de Windows.
+    void update_hdr_output(bool force);
+    bool ensure_ui_target();
     bool sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const client::LatencyTarget& target);
     void switch_monitor(std::uint32_t id);
     void process_client();
@@ -108,6 +118,12 @@ private:
     void draw_stream_overlay();
     void draw_stats_overlay();
     void draw_stream_toolbar();
+    struct TabResult {
+        bool clicked = false;
+        bool hovered = false;
+    };
+    // Pestaña pequeña centrada arriba: con ✕ (debajo de la barra) o con una flecha (barra oculta).
+    TabResult draw_toolbar_tab(bool close_icon, float y);
     void draw_pin_modal();
     void draw_toast();
     void toast(std::string text);
@@ -154,6 +170,10 @@ private:
     bool show_menu_ = false;
     bool show_stats_ = false;
     std::uint64_t toolbar_until_us_ = 0;  // La barra superior se muestra hasta este instante.
+    std::uint64_t toolbar_tab_until_us_ = 0;  // Barra oculta: el ícono para volver a mostrarla, hasta este instante.
+    Size followed_display_;               // Pantalla para la que se pidió el stream ("Igual a esta pantalla").
+    std::uint32_t followed_hz_ = 0;
+    std::uint64_t display_checked_us_ = 0;
     bool relative_mouse_ = false;
     std::optional<PointF> pending_mouse_;
     std::uint64_t last_mouse_send_us_ = 0;
@@ -187,6 +207,17 @@ private:
     bool update_dismissed_ = false;
     std::atomic<bool> update_cancel_{false};
     std::thread update_thread_;
+
+    // Salida HDR del cliente.
+    bool hdr_output_ = false;
+    DXGI_FORMAT swap_format_ = DXGI_FORMAT_B8G8R8A8_UNORM;
+    gpu::DisplayColor display_color_;
+    std::uint64_t hdr_checked_us_ = 0;
+    std::uint16_t hdr_checked_epoch_ = 0xFFFF;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> ui_tex_;
+    Microsoft::WRL::ComPtr<ID3D11RenderTargetView> ui_rtv_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView> ui_srv_;
+    std::unique_ptr<gpu::UiCompositor> ui_compositor_;
 
     // Host como servicio de Windows (instalación elevada en un hilo propio).
     bool service_host_ = false;

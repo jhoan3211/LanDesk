@@ -38,6 +38,10 @@ Si la red se corta, el cliente **se reconecta solo** (reintenta cada 2 s durante
 
 Lleva el mouse al **borde superior** de la ventana del stream: aparece una barra con **resolución, FPS, monitor, bitrate, códec y audio** (frecuencia, estéreo/mono y volumen), más *Abrir otro monitor…*, *Latencia mínima*, *Medir latencia*, *Estadísticas*, *Más opciones*, *Pantalla completa* y *Desconectar*. Los cambios se aplican al momento sin reconectar; el bitrate, el FEC y el audio ni siquiera reinician el video.
 
+Por defecto la resolución y los FPS son **"Igual a esta pantalla"**: el cliente pide la resolución y los Hz del monitor donde está su ventana (y los vuelve a pedir si la mueves a otro monitor). Así el host no codifica más píxeles ni más cuadros de los que se pueden ver.
+
+**Ocultar la barra**: debajo de la barra sobresale una **✕** en el centro. Al pulsarla la barra ya no aparece al pasar el mouse por arriba; solo se ve una **flecha pequeña** en el centro del borde superior, y al pulsarla vuelve la barra. El tamaño de la ✕ y la flecha se cambia en *Ajustes → Cliente*.
+
 ### Dos monitores a la vez
 
 *Abrir otro monitor…* (barra superior o menú) muestra otro monitor del host en una **segunda ventana**, con su propio stream en paralelo. Si el cliente tiene dos monitores, la ventana se abre a pantalla completa en el otro. Doble clic o `F11` alterna pantalla completa; el mouse funciona en las dos ventanas y el teclado va a la que esté activa.
@@ -63,7 +67,10 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 
 ## Funciones
 
-- **Configuración del stream** (antes y durante la sesión, sin reconectar): monitor (o todos), resolución (nativa, 720p, 1080p, 1440p, 4K o personalizada), FPS (30–240 o personalizado), códec (automático, H.264, HEVC, AV1), bitrate (automático o 5–1000 Mbps), CBR/VBR, escalado (ajustar, estirar, 1:1), V-Sync, audio y FEC (0–50 %). **Perfiles** con nombre ("Trabajo 1440p 4:4:4", "Juego 144 Hz", "Celular" y los tuyos).
+- **Configuración del stream** (antes y durante la sesión, sin reconectar): monitor (o todos), resolución (igual a esta pantalla, 720p, 1080p, 1440p, 4K o personalizada), FPS (igual a esta pantalla, 30–240 o personalizado), códec (automático, H.264, HEVC, AV1), bitrate (automático o 5–1000 Mbps), CBR/VBR, escalado (ajustar, estirar, 1:1), V-Sync, audio y FEC (0–50 %). **Perfiles** con nombre ("Trabajo 1440p 4:4:4", "Juego 144 Hz", "Celular" y los tuyos).
+- **4:4:4 real** (texto e íconos nítidos, sin bordes de color) con cualquier códec y decodificador: el host empaca el color completo en un cuadro de doble alto y el cliente lo reconstruye con un shader (como AVC444 de Escritorio remoto). Cuesta el doble de trabajo al codificador.
+- **HDR de 10 bits** (HDR10, BT.2020 PQ) con HEVC o AV1: requiere el monitor del host en modo HDR y una GPU AMD o NVIDIA en el host. En una pantalla HDR se ve en HDR; en una SDR se adapta (tone mapping).
+- **Ajuste automático**: si el codificador del host tarda más que el tiempo entre cuadros, baja la resolución (hasta 720p) y luego los FPS, y lo avisa. Nunca deja que se acumulen cuadros esperando (cada uno sumaría latencia).
 - **Multi-monitor**: lista de monitores del host con resolución, Hz y posición (incluidas coordenadas negativas); cambio en vivo y **dos monitores a la vez** en dos ventanas.
 - **Control remoto**: mouse absoluto o relativo, rueda, teclado por scancodes, cursor dibujado localmente (sin latencia) y modo solo ver.
 - **Audio** del host (WASAPI loopback, PCM sin compresión: cero latencia de códec). Frecuencia elegible en vivo (la del sistema, 48 000, 44 100, 32 000, 24 000 o 16 000 Hz), estéreo o mono, volumen y búfer de reproducción (5–200 ms).
@@ -115,6 +122,9 @@ Puertos (configurables en *Ajustes*): TCP **47984** (control), TCP **47985** (ar
 - **"No se pudo conectar"**: haz ping a la IP del host. Si el ping funciona, casi siempre es el firewall del host.
 - **Pantalla negra o "Esperando video"**: actualiza el driver de la GPU del host. Revisa *Diagnóstico* en ambos equipos (codificadores en el host y decodificadores en el cliente).
 - **Volver a pedir PIN**: en el host, *Este equipo (host)* → *Equipos emparejados* → *Olvidar*.
+- **"Ajuste automático: el codificador tardaba…"**: la GPU del host no da abasto con esa resolución y FPS. Baja la resolución, usa "Igual a esta pantalla" o quita 4:4:4. Se puede desactivar en *Ajustes → Ajuste automático*.
+- **Pedí HDR pero llega SDR**: el aviso al conectar dice por qué (monitor del host sin HDR activado, cliente sin HEVC/AV1, GPU sin 10 bits, monitor girado…).
+- **LanCast se cerró solo**: al volver a abrirlo avisa y guarda un informe en *Diagnóstico → Cierres inesperados*. Sirve para encontrar el error (junto con `LanCast.pdb` del mismo release).
 - **Registro**: *Ajustes* → *Registro*, o el archivo `%APPDATA%\LanCast\lancast.log` (con el servicio: `C:\ProgramData\LanCast\agent.log`).
 - **"Ese monitor ya se ve en la ventana principal"**: la segunda ventana debe mostrar un monitor distinto (Windows no permite capturar dos veces la misma pantalla).
 
@@ -128,6 +138,7 @@ LanCast.exe --no-host                     Solo cliente (segunda instancia en el 
 LanCast.exe --measure-latency             Medir la latencia al conectar
 LanCast.exe --install-service             (Administrador) Instalar el host como servicio
 LanCast.exe --uninstall-service           (Administrador) Desinstalarlo
+LanCast.exe --crash-test                  Provoca un cierre para probar los informes de fallos
 ```
 
 La variable de entorno `LANCAST_DATA_DIR` cambia la carpeta de configuración (útil para pruebas).
@@ -146,7 +157,7 @@ El ejecutable queda en `build\lancast-app\Release\LanCast.exe`. GitHub Actions (
 
 Las pruebas incluyen **fuzzing por mutación** (semillas fijas) de todos los lectores del protocolo, la cabecera de video, el reensamblador, TOML y JSON.
 
-Para publicar una versión: en las notas del *release* debe ir la línea `SHA-256: <hash de LanCast.exe>` (la actualización automática se niega a instalar un archivo sin hash verificado).
+**Publicar una versión** (`.github/workflows/release.yml`): cambia `VERSION` en `CMakeLists.txt`, agrega la sección en `CHANGELOG.md`, súbelo y crea el tag `vX.Y.Z` (o *Actions → Release → Run workflow*). El workflow compila, prueba, firma si hay certificado configurado, agrega `SHA-256:` a las notas (la actualización automática lo exige) y publica `LanCast.exe` y `LanCast.pdb`. Firma de código: ver [docs/firma-de-codigo.md](docs/firma-de-codigo.md).
 
 ### Estructura
 
@@ -174,4 +185,3 @@ tests/              Unitarias (core), integración con el hardware (platform) y 
 
 - Cliente web para el celular (HTTPS, video, táctil y archivos).
 - App Android para compartir la pantalla del celular (opcional).
-- 4:4:4 y HDR de 10 bits: la interfaz los permite elegir, pero los codificadores de Media Foundation transmiten 4:2:0 de 8 bits (el host lo indica al conectar).

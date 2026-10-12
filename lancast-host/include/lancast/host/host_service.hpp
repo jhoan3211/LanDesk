@@ -28,6 +28,7 @@ struct StreamStats {
     double encode_ms = 0;              // Conversión NV12 + codificador por hardware.
     std::uint64_t frames = 0;
     std::uint64_t keyframes = 0;
+    double skipped_percent = 0;  // Cuadros no enviados porque el codificador seguía ocupado.
 };
 
 struct Status {

@@ -235,6 +235,9 @@ private:
         if ((r = context_->InitDX11(device.device.Get())) != AMF_OK) return std::unexpected(platform::Error{amf_error("InitDX11", r), 0});
 
         const AmfProps& p = props_for(config_.codec);
+        if (config_.ten_bit && config_.codec == Codec::H264) {
+            return std::unexpected(platform::Error{"AMF: H.264 no admite 10 bits (HDR)", 0});
+        }
         if ((r = factory_->CreateComponent(context_, p.component, &encoder_)) != AMF_OK) {
             return std::unexpected(platform::Error{amf_error(std::format("{} no soportado por esta GPU", to_string(config_.codec)).c_str(), r), 0});
         }
@@ -268,13 +271,33 @@ private:
                 }
                 break;
             case Codec::Hevc:
-                encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_PROFILE, static_cast<amf_int64>(AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN));
+                encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_PROFILE,
+                                      static_cast<amf_int64>(config_.ten_bit ? AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN_10
+                                                                             : AMF_VIDEO_ENCODER_HEVC_PROFILE_MAIN));
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_GOP_SIZE, static_cast<amf_int64>(config_.fps) * 3600);
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_NUM_GOPS_PER_IDR, static_cast<amf_int64>(1));
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_LOWLATENCY_MODE, true);
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_FILLER_DATA_ENABLE, false);
-                encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PROFILE,
-                                      static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_709));
+                if (config_.ten_bit) {
+                    // HDR10: la entrada ya viene en BT.2020 PQ (shader del host); se declara igual a la salida.
+                    if (encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_COLOR_BIT_DEPTH,
+                                              static_cast<amf_int64>(AMF_COLOR_BIT_DEPTH_10)) != AMF_OK) {
+                        return std::unexpected(platform::Error{"AMF: esta GPU no codifica HEVC de 10 bits", 0});
+                    }
+                    for (const wchar_t* prop : {AMF_VIDEO_ENCODER_HEVC_INPUT_COLOR_PROFILE, AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PROFILE}) {
+                        encoder_->SetProperty(prop, static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020));
+                    }
+                    for (const wchar_t* prop : {AMF_VIDEO_ENCODER_HEVC_INPUT_TRANSFER_CHARACTERISTIC,
+                                                AMF_VIDEO_ENCODER_HEVC_OUTPUT_TRANSFER_CHARACTERISTIC}) {
+                        encoder_->SetProperty(prop, static_cast<amf_int64>(AMF_COLOR_TRANSFER_CHARACTERISTIC_SMPTE2084));
+                    }
+                    for (const wchar_t* prop : {AMF_VIDEO_ENCODER_HEVC_INPUT_COLOR_PRIMARIES, AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PRIMARIES}) {
+                        encoder_->SetProperty(prop, static_cast<amf_int64>(AMF_COLOR_PRIMARIES_BT2020));
+                    }
+                } else {
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_HEVC_OUTPUT_COLOR_PROFILE,
+                                          static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_709));
+                }
                 if (config_.intra_refresh) {
                     const amf_int64 ctbs = ((config_.size.width + 63) / 64) * ((config_.size.height + 63) / 64);
                     const amf_int64 frames = std::max<amf_int64>(config_.fps / 2, 8);
@@ -287,8 +310,23 @@ private:
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_ENCODING_LATENCY_MODE,
                                       static_cast<amf_int64>(AMF_VIDEO_ENCODER_AV1_ENCODING_LATENCY_MODE_LOWEST_LATENCY));
                 encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_SCREEN_CONTENT_TOOLS, true);
-                encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PROFILE,
-                                      static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_709));
+                if (config_.ten_bit) {
+                    if (encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_COLOR_BIT_DEPTH,
+                                              static_cast<amf_int64>(AMF_COLOR_BIT_DEPTH_10)) != AMF_OK) {
+                        return std::unexpected(platform::Error{"AMF: esta GPU no codifica AV1 de 10 bits", 0});
+                    }
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_INPUT_COLOR_PROFILE,
+                                          static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020));
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PROFILE,
+                                          static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_2020));
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_TRANSFER_CHARACTERISTIC,
+                                          static_cast<amf_int64>(AMF_COLOR_TRANSFER_CHARACTERISTIC_SMPTE2084));
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PRIMARIES,
+                                          static_cast<amf_int64>(AMF_COLOR_PRIMARIES_BT2020));
+                } else {
+                    encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_OUTPUT_COLOR_PROFILE,
+                                          static_cast<amf_int64>(AMF_VIDEO_CONVERTER_COLOR_PROFILE_709));
+                }
                 if (config_.intra_refresh) {
                     intra_refresh_ = encoder_->SetProperty(AMF_VIDEO_ENCODER_AV1_INTRA_REFRESH_MODE,
                                                            static_cast<amf_int64>(AMF_VIDEO_ENCODER_AV1_INTRA_REFRESH_MODE__CONTINUOUS)) == AMF_OK;
@@ -310,12 +348,13 @@ private:
             }
         }
 
-        if ((r = encoder_->Init(amf::AMF_SURFACE_NV12, static_cast<amf_int32>(config_.size.width),
+        if ((r = encoder_->Init(config_.ten_bit ? amf::AMF_SURFACE_P010 : amf::AMF_SURFACE_NV12,
+                                static_cast<amf_int32>(config_.size.width),
                                 static_cast<amf_int32>(config_.size.height))) != AMF_OK) {
             return std::unexpected(platform::Error{
                 amf_error(std::format("Init {}x{}", config_.size.width, config_.size.height).c_str(), r), 0});
         }
-        name_ = std::format("AMD AMF {}", to_string(config_.codec));
+        name_ = std::format("AMD AMF {}{}", to_string(config_.codec), config_.ten_bit ? " 10 bits" : "");
         running_ = true;
         output_thread_ = std::thread([this] { output_loop(); });
         log::info("Codificador: {} directo ({}x{} @ {} fps, {} kbps, {}{}{})", name_, config_.size.width, config_.size.height,

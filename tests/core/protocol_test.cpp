@@ -202,3 +202,63 @@ TEST(Protocol, SecureAttentionHasNoBody) {
     ASSERT_EQ(bytes.size(), 1u);
     EXPECT_EQ(bytes[0], 34);
 }
+
+TEST(Protocol, ColorFeaturesAreOptional) {
+    // Cliente 1.4: anuncia 4:4:4 y HDR; un cliente 1.3 no los envía.
+    ClientCaps caps;
+    caps.client_name = "Cliente";
+    caps.supports_slices = true;
+    caps.supports_444 = true;
+    caps.supports_hdr = true;
+    const ClientCaps back = roundtrip(caps);
+    EXPECT_TRUE(back.supports_444);
+    EXPECT_TRUE(back.supports_hdr);
+    {
+        ByteWriter w;
+        caps.write(w);
+        std::vector<std::uint8_t> old = w.take();
+        old.resize(old.size() - 2);
+        ByteReader r(old);
+        const auto out = ClientCaps::read(r);
+        ASSERT_TRUE(out.has_value());
+        EXPECT_TRUE(out->supports_slices);
+        EXPECT_FALSE(out->supports_444);
+        EXPECT_FALSE(out->supports_hdr);
+    }
+
+    // Host 1.4: StreamStarted con 4:4:4/HDR; uno 1.3 no los envía.
+    StreamStarted st;
+    st.width = 1920;
+    st.height = 1080;
+    st.chroma_444 = true;
+    st.hdr = true;
+    const StreamStarted st_back = roundtrip(st);
+    EXPECT_TRUE(st_back.chroma_444);
+    EXPECT_TRUE(st_back.hdr);
+    {
+        ByteWriter w;
+        st.write(w);
+        std::vector<std::uint8_t> old = w.take();
+        old.resize(old.size() - 2);
+        ByteReader r(old);
+        const auto out = StreamStarted::read(r);
+        ASSERT_TRUE(out.has_value());
+        EXPECT_FALSE(out->chroma_444);
+        EXPECT_FALSE(out->hdr);
+    }
+
+    // StreamConfig 1.4: "adaptive" opcional (ausente = activado).
+    StreamConfig cfg;
+    cfg.adaptive = false;
+    EXPECT_FALSE(roundtrip(cfg).adaptive);
+    {
+        ByteWriter w;
+        cfg.write(w);
+        std::vector<std::uint8_t> old = w.take();
+        old.pop_back();
+        ByteReader r(old);
+        const auto out = StreamConfig::read(r);
+        ASSERT_TRUE(out.has_value());
+        EXPECT_TRUE(out->adaptive);
+    }
+}

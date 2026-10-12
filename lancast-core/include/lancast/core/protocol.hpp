@@ -129,6 +129,8 @@ struct ClientCaps {
     std::uint32_t display_height = 0;
     std::uint32_t display_refresh = 60;
     bool supports_slices = false;  // Opcional (1.3+): sabe reensamblar frames enviados por slices.
+    bool supports_444 = false;     // Opcional (1.4+): reconstruye 4:4:4 empaquetado (cuadro W×2H).
+    bool supports_hdr = false;     // Opcional (1.4+): decodifica 10 bits BT.2020 PQ.
     void write(ByteWriter& w) const;
     static std::optional<ClientCaps> read(ByteReader& r);
 };
@@ -177,6 +179,7 @@ struct StreamConfig {
     bool slices = true;               // Opcional (1.3+): envío por slices (sub-frame).
     std::uint8_t stream_index = 0;    // Opcional (1.3+): 0 = principal, 1 = segunda ventana.
     bool enabled = true;              // Opcional (1.3+): false = detener ese stream.
+    bool adaptive = true;             // Opcional (1.4+): bajar resolución/FPS si el codificador no da abasto.
     void write(ByteWriter& w) const;
     static std::optional<StreamConfig> read(ByteReader& r);
 };
@@ -197,6 +200,8 @@ struct StreamStarted {
     bool slices = false;          // Opcional (1.3+): los frames llegan por slices.
     std::string encoder_backend;  // Opcional (1.3+): "AMF directo", "NVENC directo", "Media Foundation".
     std::uint8_t stream_index = 0;  // Opcional (1.3+).
+    bool chroma_444 = false;  // Opcional (1.4+): 4:4:4 empaquetado; el cuadro codificado mide width × 2·height.
+    bool hdr = false;         // Opcional (1.4+): 10 bits BT.2020 PQ (HDR10).
     void write(ByteWriter& w) const;
     static std::optional<StreamStarted> read(ByteReader& r);
 };

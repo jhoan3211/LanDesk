@@ -24,9 +24,10 @@ struct PointerState {
 class DesktopCapture {
 public:
     // monitor_rects: rectángulos (escritorio virtual) de los monitores a capturar; source: unión de ellos.
+    // hdr: captura en FP16 scRGB (monitores en modo HDR); si no, BGRA de 8 bits.
     static platform::Result<std::unique_ptr<DesktopCapture>> create(const gpu::Device& device,
                                                                      const std::vector<Rect>& monitor_rects,
-                                                                     const Rect& source);
+                                                                     const Rect& source, bool hdr = false);
     ~DesktopCapture();
 
     Status acquire(std::uint32_t timeout_ms);
@@ -37,6 +38,9 @@ public:
     [[nodiscard]] std::uint32_t rotation() const noexcept { return rotation_; }
     // Tamaño de la textura capturada (sin rotar).
     [[nodiscard]] Size texture_size() const noexcept { return texture_size_; }
+    [[nodiscard]] DXGI_FORMAT format() const noexcept {
+        return hdr_ ? DXGI_FORMAT_R16G16B16A16_FLOAT : DXGI_FORMAT_B8G8R8A8_UNORM;
+    }
 
     // Instante (µs, reloj QPC) en que Windows presentó la última imagen capturada.
     [[nodiscard]] std::uint64_t last_present_us() const noexcept { return last_present_us_; }
@@ -58,6 +62,7 @@ private:
     gpu::ComPtr<ID3D11Texture2D> composite_;
     Size texture_size_;
     std::uint32_t rotation_ = 0;
+    bool hdr_ = false;
     PointerState pointer_;
     std::optional<proto::CursorShape> pending_shape_;
     std::uint64_t last_recreate_us_ = 0;
