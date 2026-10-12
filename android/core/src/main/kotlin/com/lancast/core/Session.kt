@@ -1,0 +1,513 @@
+package com.lancast.core
+
+import java.io.DataInputStream
+import java.io.EOFException
+import java.io.OutputStream
+import java.net.DatagramPacket
+import java.net.DatagramSocket
+import java.net.InetAddress
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.SocketTimeoutException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
+
+// Cliente de LanCast (port de lancast-client/client_session.cpp, sin la segunda ventana ni archivos).
+
+// Emparejamientos guardados: secreto de 32 bytes por id del host (hex).
+interface PairingStore {
+    fun secret(hostId: String): ByteArray?
+    fun save(hostId: String, name: String, address: String, secret: ByteArray)
+    fun forget(hostId: String)
+}
+
+class MemoryPairingStore : PairingStore {
+    private val map = HashMap<String, ByteArray>()
+    override fun secret(hostId: String) = synchronized(map) { map[hostId] }
+    override fun save(hostId: String, name: String, address: String, secret: ByteArray) {
+        synchronized(map) { map[hostId] = secret }
+    }
+
+    override fun forget(hostId: String) {
+        synchronized(map) { map.remove(hostId) }
+    }
+}
+
+// Eventos de la sesión (llegan desde hilos de red).
+interface SessionListener {
+    // El host pide PIN: llamar a Session.submitPin (o close para cancelar).
+    fun onNeedPin(hostName: String) {}
+    fun onConnected(hostName: String) {}
+    fun onHostInfo(info: HostInfo) {}
+    fun onStreamStarted(stream: StreamStarted) {}
+    fun onVideoFrame(frame: AssembledFrame, arrivalUs: Long) {}
+    fun onAudio(pcm: ShortArray, sampleRate: Int, channels: Int) {}
+    fun onCursorPos(pos: CursorPos) {}
+    fun onCursorShape(shape: CursorShape) {}
+    fun onClipboard(text: String) {}
+    fun onMessage(text: String) {}
+    fun onClosed(reason: String, retryable: Boolean) {}
+}
+
+data class SessionStats(
+    val rttMs: Double = 0.0,
+    val fps: Double = 0.0,
+    val bitrateMbps: Double = 0.0,
+    val networkMs: Double = 0.0,
+    val framesRecovered: Long = 0,
+    val framesLost: Long = 0,
+    val keyframeRequests: Long = 0,
+)
+
+class Session(
+    private val deviceId: ByteArray,
+    private val deviceName: String,
+    private val pairing: PairingStore,
+    private val listener: SessionListener,
+) {
+    @Volatile var hostName = ""
+        private set
+    @Volatile var hostInfo: HostInfo? = null
+        private set
+    @Volatile var stream: StreamStarted? = null
+        private set
+    @Volatile var stats = SessionStats()
+        private set
+
+    private val stopping = AtomicBoolean(false)
+    private val pin = AtomicReference<String?>(null)
+    private var pinLatch = CountDownLatch(1)
+    private var socket: Socket? = null
+    private var output: OutputStream? = null
+    private var sendCipher: AesGcm? = null
+    private var sendCounter = 0L
+    private val sendLock = Any()
+    private var mediaSocket: DatagramSocket? = null
+    private var controlThread: Thread? = null
+    private var mediaThread: Thread? = null
+    private var mediaRxKey = ByteArray(0)
+    private var mediaTxKey = ByteArray(0)
+    private var hostAddress: InetAddress? = null
+
+    // Medios (solo el hilo de medios).
+    private val assembler = FrameAssembler()
+    private val joiner = SliceJoiner()
+    @Volatile private var waitingKeyframe = true
+    @Volatile private var lastFrameUs = 0L
+    @Volatile private var lastIdrRequestUs = 0L
+    private var keyframeRequests = 0L
+    private var clockOffsetUs = 0L  // reloj del host - reloj local (por ping)
+    private var hasClock = false
+
+    fun connect(host: String, port: Int, caps: ClientCaps, config: StreamConfig) {
+        controlThread = Thread({ controlLoop(host, port, caps, config) }, "lancast-control").apply { start() }
+    }
+
+    fun submitPin(value: String) {
+        pin.set(value)
+        pinLatch.countDown()
+    }
+
+    fun send(message: ByteArray): Boolean {
+        val cipher = sendCipher ?: return false
+        val out = output ?: return false
+        return try {
+            synchronized(sendLock) {
+                val sealed = cipher.encrypt(counterNonce(sendCounter++), null, message)
+                writeFrame(out, sealed)
+            }
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun requestStream(config: StreamConfig) = send(config.encode())
+
+    fun requestKeyframe(reason: Int = 0) {
+        val now = nowUs()
+        if (now - lastIdrRequestUs < (if (reason == 1) 300_000 else 30_000)) return
+        lastIdrRequestUs = now
+        keyframeRequests++
+        send(Messages.requestKeyframe(reason))
+    }
+
+    fun close() {
+        if (stopping.getAndSet(true)) return
+        pinLatch.countDown()
+        try {
+            send(Messages.releaseAll())
+            send(Messages.disconnect())
+        } catch (_: Exception) {
+        }
+        try {
+            socket?.close()
+        } catch (_: Exception) {
+        }
+        mediaSocket?.close()
+    }
+
+    // ------------------------------------------------------------------------------------------- control
+
+    private fun controlLoop(host: String, port: Int, caps: ClientCaps, config: StreamConfig) {
+        var reason = "Desconectado"
+        var retryable = true
+        try {
+            val sock = Socket()
+            sock.tcpNoDelay = true
+            sock.connect(InetSocketAddress(host, port), 4000)
+            socket = sock
+            hostAddress = sock.inetAddress
+            output = sock.getOutputStream()
+            val input = DataInputStream(sock.getInputStream().buffered(64 * 1024))
+            sock.soTimeout = 10_000
+            val recvCipher = handshake(sock, input) ?: return
+            sock.soTimeout = 15_000
+            listener.onConnected(hostName)
+            send(caps.encode())
+            send(config.encode())
+
+            var recvCounter = 0L
+            while (!stopping.get()) {
+                val sealed = readFrame(input, 8 shl 20) ?: break
+                val msg = recvCipher.decrypt(counterNonce(recvCounter++), null, sealed)
+                if (msg == null) {
+                    reason = "Canal cifrado inválido"
+                    retryable = false
+                    break
+                }
+                if (msg.isEmpty()) continue
+                handleMessage(msg)
+            }
+        } catch (e: SocketTimeoutException) {
+            reason = "El host dejó de responder"
+        } catch (e: EOFException) {
+            reason = "El host cerró la conexión"
+        } catch (e: Exception) {
+            if (!stopping.get()) reason = "No se pudo conectar: ${e.message ?: e.javaClass.simpleName}"
+        } finally {
+            val wasStopping = stopping.getAndSet(true)
+            try {
+                socket?.close()
+            } catch (_: Exception) {
+            }
+            mediaSocket?.close()
+            if (!wasStopping) listener.onClosed(reason, retryable) else listener.onClosed("Desconectado", false)
+        }
+    }
+
+    // Devuelve el descifrador del canal de control, o null si falló (ya notificado).
+    private fun handshake(sock: Socket, input: DataInputStream): AesGcm? {
+        val out = output!!
+        val ecdh = Ecdh()
+        val helloRaw = Hello(deviceId, deviceName, ecdh.publicKey, Crypto.randomBytes(32)).encode()
+        writeFrame(out, helloRaw)
+        val ackRaw = readFrame(input, 64 * 1024) ?: return fail("El host no respondió", true)
+        val ack = parse(ackRaw, MsgType.HELLO_ACK)?.let { HelloAck.read(it) } ?: return fail("Respuesta inválida del host", false)
+        hostName = ack.deviceName
+        if (!ack.accepted) return fail(ack.message, ack.message.contains("sesión activa"))
+        if (ack.version != Proto.VERSION) return fail("Versión de LanCast distinta en el PC (actualízalo)", false)
+
+        val th = SessionCrypto.transcript(helloRaw, ackRaw)
+        val z = ecdh.derive(ack.publicKey) ?: return fail("Clave del host inválida", false)
+        val hostId = ack.deviceId.toHex()
+        val known = pairing.secret(hostId)
+        val usePairing = ack.hasPairing && known != null
+        writeFrame(out, encode(MsgType.AUTH_START) { it.bool(usePairing) })
+
+        val startRaw = readFrame(input, 64 * 1024) ?: return fail("El host cerró la conexión", true)
+        val pinRequired = parse(startRaw, MsgType.AUTH_START_ACK)?.bool() ?: return fail("Respuesta inválida del host", false)
+
+        val authKey = if (pinRequired) {
+            pinLatch = CountDownLatch(1)
+            pin.set(null)
+            sock.soTimeout = 0
+            listener.onNeedPin(hostName)
+            if (!pinLatch.await(115, TimeUnit.SECONDS) || stopping.get()) {
+                return if (stopping.get()) null else fail("Tiempo de espera del PIN agotado", false)
+            }
+            SessionCrypto.authKeyFromPin(pin.get() ?: "", th)
+        } else {
+            SessionCrypto.authKeyFromSecret(known!!, th)
+        }
+
+        writeFrame(out, encode(MsgType.AUTH_PROOF) { it.raw(SessionCrypto.proof(authKey, "client", th, z)) })
+        sock.soTimeout = 15_000
+        val resultRaw = readFrame(input, 64 * 1024) ?: return fail("El host cerró la conexión durante la autenticación", true)
+        val result = parse(resultRaw, MsgType.AUTH_RESULT)?.let { AuthResult.read(it) }
+        if (result == null || !result.ok) {
+            if (usePairing) pairing.forget(hostId)
+            return fail(result?.message ?: "Autenticación rechazada", false)
+        }
+        if (!Crypto.equalsConstantTime(result.mac, SessionCrypto.proof(authKey, "host", th, z))) {
+            return fail("El host no pudo demostrar su identidad", false)
+        }
+        val keys = SessionCrypto.deriveKeys(z, authKey, th)
+        if (pinRequired) pairing.save(hostId, ack.deviceName, sock.inetAddress.hostAddress ?: "", keys.pairingSecret)
+        mediaRxKey = keys.mediaH2c
+        mediaTxKey = keys.mediaC2h
+        synchronized(sendLock) {
+            sendCipher = AesGcm(keys.controlC2h)
+            sendCounter = 0
+        }
+        return AesGcm(keys.controlH2c)
+    }
+
+    private fun fail(message: String, retryable: Boolean): AesGcm? {
+        if (!stopping.getAndSet(true)) listener.onClosed(message, retryable)
+        return null
+    }
+
+    private fun handleMessage(msg: ByteArray) {
+        val r = ByteReader(msg, 1)
+        when (msg[0].toInt() and 0xFF) {
+            MsgType.HOST_INFO -> HostInfo.read(r)?.let { info ->
+                val first = hostInfo == null
+                hostInfo = info
+                listener.onHostInfo(info)
+                if (first) mediaThread = Thread({ mediaLoop(info.mediaPort) }, "lancast-media").apply {
+                    priority = Thread.MAX_PRIORITY
+                    start()
+                }
+            }
+            MsgType.STREAM_STARTED -> StreamStarted.read(r)?.let { s ->
+                if (s.streamIndex != 0) return
+                stream = s
+                waitingKeyframe = true
+                listener.onStreamStarted(s)
+            }
+            MsgType.STREAM_ERROR -> listener.onMessage(r.str(4096))
+            MsgType.PONG -> {
+                val sent = r.u64()
+                val hostTime = r.u64()
+                if (r.ok) {
+                    val now = nowUs()
+                    val rtt = now - sent
+                    // Reloj del host respecto del local (estimado en la mitad del viaje).
+                    clockOffsetUs = hostTime - (sent + rtt / 2)
+                    hasClock = true
+                    stats = stats.copy(rttMs = rtt / 1000.0)
+                }
+            }
+            MsgType.CURSOR_POS -> CursorPos.read(r)?.let { if (it.streamIndex == 0) listener.onCursorPos(it) }
+            MsgType.CURSOR_SHAPE -> CursorShape.read(r)?.let { listener.onCursorShape(it) }
+            MsgType.CLIPBOARD -> listener.onClipboard(r.str())
+            MsgType.DISCONNECT -> {
+                if (!stopping.getAndSet(true)) listener.onClosed("El host cerró la sesión", false)
+                try {
+                    socket?.close()
+                } catch (_: Exception) {
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------- medios
+
+    private fun mediaLoop(mediaPort: Int) {
+        val sock = DatagramSocket()
+        mediaSocket = sock
+        try {
+            sock.receiveBufferSize = 8 shl 20
+        } catch (_: Exception) {
+        }
+        sock.soTimeout = 20
+        val host = hostAddress ?: return
+        val rx = AesGcm(mediaRxKey)
+        val tx = AesGcm(mediaTxKey)
+        var txSeq = 1L
+        val buf = ByteArray(2048)
+        val packet = DatagramPacket(buf, buf.size)
+        var lastHello = 0L
+        var lastPing = 0L
+        var windowStart = nowUs()
+        var windowFrames = 0
+        var windowBytes = 0L
+        var windowNetUs = 0L
+
+        while (!stopping.get()) {
+            val now = nowUs()
+            if (now - lastHello > 500_000) {
+                // Registra/renueva el endpoint UDP en el host (tráfico saliente: atraviesa el firewall del celular).
+                val header = packetHeader(MediaConst.TYPE_CLIENT_HELLO, txSeq++)
+                val sealed = tx.encrypt(header, header, byteArrayOf(1))
+                val datagram = header + sealed
+                try {
+                    sock.send(DatagramPacket(datagram, datagram.size, host, mediaPort))
+                } catch (_: Exception) {
+                }
+                lastHello = now
+            }
+            if (now - lastPing > 1_000_000) {
+                send(Messages.ping(nowUs()))
+                lastPing = now
+            }
+            if (now - windowStart >= 1_000_000) {
+                val secs = (now - windowStart) / 1e6
+                stats = stats.copy(
+                    fps = windowFrames / secs,
+                    bitrateMbps = windowBytes * 8 / secs / 1e6,
+                    networkMs = if (windowFrames > 0) windowNetUs / 1000.0 / windowFrames else stats.networkMs,
+                    framesRecovered = assembler.framesRecovered,
+                    framesLost = assembler.framesLost,
+                    keyframeRequests = keyframeRequests,
+                )
+                windowStart = now
+                windowFrames = 0
+                windowBytes = 0
+                windowNetUs = 0
+            }
+
+            try {
+                packet.setData(buf, 0, buf.size)
+                sock.receive(packet)
+            } catch (_: SocketTimeoutException) {
+                watchdog()
+                continue
+            } catch (_: Exception) {
+                break
+            }
+            val n = packet.length
+            if (n < MediaConst.PACKET_HEADER_SIZE + MediaConst.TAG_SIZE || packet.address != host) continue
+            windowBytes += n
+            val header = buf.copyOf(MediaConst.PACKET_HEADER_SIZE)
+            val payload = rx.decrypt(header, header, buf, MediaConst.PACKET_HEADER_SIZE, n - MediaConst.PACKET_HEADER_SIZE) ?: continue
+            when (header[0].toInt()) {
+                MediaConst.TYPE_VIDEO -> {
+                    val frame = handleVideo(payload)
+                    if (frame != null) {
+                        val arrival = nowUs()
+                        windowFrames++
+                        if (hasClock) windowNetUs += (arrival + clockOffsetUs - frame.info.captureTimeUs - frame.info.encodeTimeUs)
+                            .coerceIn(0, 1_000_000)
+                        listener.onVideoFrame(frame, arrival)
+                    }
+                    watchdog()
+                }
+                MediaConst.TYPE_AUDIO -> handleAudio(payload)
+            }
+        }
+    }
+
+    private fun handleVideo(payload: ByteArray): AssembledFrame? {
+        val r = ByteReader(payload)
+        val h = VideoShardHeader.read(r) ?: return null
+        if (h.flags and MediaConst.FLAG_STREAM1 != 0) return null  // Segunda ventana: no se usa en el celular.
+        val unit = assembler.add(h, payload, r.position, payload.size - r.position)
+        val frame = unit?.let { joiner.add(it) }
+        val lost = assembler.takeLost() + joiner.takeLost()
+        if (lost > 0) {
+            if (stream?.intraRefresh == true && !waitingKeyframe) {
+                requestKeyframe(1)
+            } else {
+                waitingKeyframe = true
+                requestKeyframe(0)
+            }
+        }
+        if (frame == null) return null
+        lastFrameUs = nowUs()
+        val s = stream
+        if (s == null || frame.info.epoch != s.epoch) return null  // Cuadro de otra configuración.
+        if (waitingKeyframe && !frame.info.keyframe) {
+            requestKeyframe(0)
+            return null
+        }
+        if (frame.info.keyframe) waitingKeyframe = false
+        return frame
+    }
+
+    // Llegan paquetes pero ningún cuadro se completa hace >250 ms (p. ej. se perdió el keyframe): pedir otro.
+    private fun watchdog() {
+        val t = nowUs()
+        if (lastFrameUs != 0L && stream != null) {
+            val since = t - lastFrameUs
+            if (since in 250_001..4_999_999 && t - lastIdrRequestUs > 250_000) requestKeyframe(0)
+        }
+    }
+
+    private fun handleAudio(payload: ByteArray) {
+        val r = ByteReader(payload)
+        r.u32()  // secuencia
+        r.u64()  // tiempo de captura
+        val rate = r.u32().toInt()
+        val channels = r.u8()
+        val frames = r.u16()
+        if (!r.ok || channels == 0) return
+        val bytes = r.raw(frames * channels * 2)
+        if (bytes.size != frames * channels * 2) return
+        val pcm = ShortArray(frames * channels)
+        java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(pcm)
+        listener.onAudio(pcm, rate, channels)
+    }
+
+    companion object {
+        fun nowUs(): Long = System.nanoTime() / 1000
+
+        fun counterNonce(counter: Long): ByteArray {
+            val n = ByteArray(12)
+            for (i in 0 until 8) n[4 + i] = (counter ushr (8 * i)).toByte()
+            return n
+        }
+
+        fun writeFrame(out: OutputStream, data: ByteArray) {
+            val len = data.size
+            val frame = ByteArray(4 + len)
+            for (i in 0 until 4) frame[i] = (len ushr (8 * i)).toByte()
+            System.arraycopy(data, 0, frame, 4, len)
+            out.write(frame)
+            out.flush()
+        }
+
+        fun readFrame(input: DataInputStream, max: Int): ByteArray? {
+            val header = ByteArray(4)
+            input.readFully(header)
+            val len = (header[0].toInt() and 0xFF) or ((header[1].toInt() and 0xFF) shl 8) or
+                ((header[2].toInt() and 0xFF) shl 16) or ((header[3].toInt() and 0xFF) shl 24)
+            if (len < 0 || len > max) return null
+            val data = ByteArray(len)
+            input.readFully(data)
+            return data
+        }
+
+        private fun parse(raw: ByteArray, type: Int): ByteReader? =
+            if (raw.isNotEmpty() && (raw[0].toInt() and 0xFF) == type) ByteReader(raw, 1) else null
+
+        // Descubrimiento: broadcast UDP; los hosts responden con su nombre e id.
+        fun discover(timeoutMs: Int, broadcast: List<InetAddress> = listOf(InetAddress.getByName("255.255.255.255"))): List<DiscoveredHost> {
+            val found = LinkedHashMap<String, DiscoveredHost>()
+            DatagramSocket().use { sock ->
+                sock.broadcast = true
+                sock.soTimeout = 100
+                val req = ByteWriter().u32(Proto.DISCOVERY_MAGIC).u8(0).toByteArray()
+                for (addr in broadcast) {
+                    try {
+                        sock.send(DatagramPacket(req, req.size, addr, Proto.DISCOVERY_PORT))
+                    } catch (_: Exception) {
+                    }
+                }
+                val buf = ByteArray(2048)
+                val deadline = System.currentTimeMillis() + timeoutMs
+                while (System.currentTimeMillis() < deadline) {
+                    val p = DatagramPacket(buf, buf.size)
+                    try {
+                        sock.receive(p)
+                    } catch (_: SocketTimeoutException) {
+                        continue
+                    }
+                    val r = ByteReader(buf, 0, p.length)
+                    if (r.u32().toInt() != Proto.DISCOVERY_MAGIC) continue
+                    r.u16()
+                    val name = r.str(256)
+                    val id = r.raw(16).toHex()
+                    val port = r.u16()
+                    r.u16()
+                    val busy = r.bool()
+                    if (r.ok) found[id] = DiscoveredHost(name, id, p.address.hostAddress ?: "", port, busy)
+                }
+            }
+            return found.values.toList()
+        }
+    }
+}

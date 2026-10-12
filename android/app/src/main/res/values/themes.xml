@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="bg">#FF13151A</color>
+    <color name="panel">#FF1C1F26</color>
+    <color name="accent">#FF4A90E2</color>
+    <color name="text">#FFE6E6EB</color>
+
+    <style name="Theme.LanCast" parent="android:Theme.Material.NoActionBar">
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:windowBackground">@color/bg</item>
+        <item name="android:statusBarColor">@color/bg</item>
+        <item name="android:navigationBarColor">@color/bg</item>
+        <item name="android:textColorPrimary">@color/text</item>
+        <item name="android:textColor">@color/text</item>
+    </style>
+
+    <style name="Theme.LanCast.Stream">
+        <item name="android:windowBackground">@android:color/black</item>
+        <item name="android:windowFullscreen">true</item>
+    </style>
+</resources>

@@ -50,3 +50,35 @@ jobs:
           name: LanCast-${{ github.sha }}
           path: build/lancast-app/Release/LanCast.exe
           if-no-files-found: error
+
+  android:
+    name: Android (Kotlin)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('android/**/*.gradle.kts', 'android/gradle/wrapper/gradle-wrapper.properties') }}
+
+      # El núcleo (protocolo, cifrado, FEC) se prueba en la JVM; la prueba contra el host real solo corre en Windows
+      # con el host compilado, así que aquí se omite sola.
+      - name: Pruebas del núcleo, lint y APK
+        working-directory: android
+        run: bash ./gradlew :core:test :app:lintDebug :app:assembleDebug --console=plain
+
+      - name: Publicar APK de prueba
+        uses: actions/upload-artifact@v4
+        with:
+          name: LanCast-android-${{ github.sha }}
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

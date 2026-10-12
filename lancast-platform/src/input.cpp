@@ -110,6 +110,28 @@ void Injector::key(std::uint16_t scancode, bool extended, bool down) {
     send(in);
 }
 
+void Injector::text(std::string_view utf8) {
+    const std::wstring wide = platform::detail::to_wide(utf8);
+    std::vector<INPUT> inputs;
+    inputs.reserve(wide.size() * 2);
+    for (const wchar_t ch : wide) {
+        if (ch == 0x0D) continue;
+        INPUT in{};
+        in.type = INPUT_KEYBOARD;
+        if (ch == 0x0A) {  // Enter como tecla (las aplicaciones no siempre aceptan U+000A).
+            in.ki.wScan = 0x1C;
+            in.ki.dwFlags = KEYEVENTF_SCANCODE;
+        } else {
+            in.ki.wScan = ch;
+            in.ki.dwFlags = KEYEVENTF_UNICODE;
+        }
+        inputs.push_back(in);
+        in.ki.dwFlags |= KEYEVENTF_KEYUP;
+        inputs.push_back(in);
+    }
+    for (INPUT& in : inputs) send(in);
+}
+
 void Injector::release_all() {
     std::set<std::uint32_t> keys;
     std::set<proto::MouseButtonId> buttons;

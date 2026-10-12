@@ -694,6 +694,9 @@ struct HostService::Impl {
                 case proto::MsgType::ReleaseAll:
                     s.injector.release_all();
                     break;
+                case proto::MsgType::Text:
+                    if (auto t = proto::TextMessage::read(r); t && control && t->text.size() <= 4096) s.injector.text(t->text);
+                    break;
                 case proto::MsgType::SecureAttention:
                     if (!control) break;
                     if (service_mode && service::request_secure_attention()) {

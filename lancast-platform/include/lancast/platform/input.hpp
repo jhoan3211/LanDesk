@@ -27,6 +27,8 @@ public:
     void mouse_button(proto::MouseButtonId button, bool down);
     void mouse_wheel(std::int32_t delta, bool horizontal);
     void key(std::uint16_t scancode, bool extended, bool down);
+    // Escribe texto Unicode tal cual (tildes, ñ, emojis): para teclados que no envían teclas físicas.
+    void text(std::string_view utf8);
     void release_all();
 
 private:

@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.manifest text eol=crlf
+*.bat text eol=crlf
+*.jar binary
+*.jks binary

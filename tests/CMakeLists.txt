@@ -44,3 +44,10 @@ add_executable(lancast-e2e-tests
 target_link_libraries(lancast-e2e-tests PRIVATE lancast::host lancast::client GTest::gtest_main d3d11 dxgi)
 lancast_set_warnings(lancast-e2e-tests)
 gtest_discover_tests(lancast-e2e-tests PROPERTIES LABELS hardware DISCOVERY_TIMEOUT 30)
+
+# Host real para las pruebas de interoperabilidad del cliente Android (android/core, Kotlin/JVM).
+add_executable(lancast-test-host
+    interop/test_host.cpp
+    ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
+target_link_libraries(lancast-test-host PRIVATE lancast::host d3d11 dxgi)
+lancast_set_warnings(lancast-test-host)
