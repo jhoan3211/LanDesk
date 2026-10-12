@@ -491,6 +491,10 @@ void App::draw_host_page() {
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.host.allow_clipboard);
     changed |= ImGui::Checkbox("Permitir transferencia de archivos", &settings_.host.allow_files);
     changed |= ImGui::Checkbox("Transmitir el audio del equipo", &settings_.host.allow_audio);
+    if (ImGui::Checkbox("Mostrar una barra roja arriba mientras alguien está conectado", &settings_.host.session_banner)) {
+        changed = true;
+        update_session_banner();
+    }
     if (changed) save_settings();
 
     section("Equipos emparejados");

@@ -56,7 +56,7 @@ En el **PC desde el que controlas** (cliente):
 2. El host aparece solo en **"Equipos encontrados en la red"**; pulsa *Conectar*. También puedes escribir la IP (`192.168.40.7`) en *Conexión manual por IP*.
 3. La primera vez el host muestra un **PIN de 6 dígitos** (en su ventana y en una notificación). Escríbelo en el cliente. Desde ese momento los dos equipos quedan **emparejados** y ya no se pide PIN.
 
-Mientras alguien está conectado, el host muestra un aviso rojo **"Sesión activa desde …"** con un botón **Desconectar**.
+Cuando alguien se conecta, el host muestra un aviso de Windows y lo indica en el ícono de la bandeja; para cortarlo: *Este equipo (host)* → **Desconectar**. (La barra roja "Sesión activa desde…" se puede activar en *Este equipo → Permisos*.)
 
 Si la red se corta, el cliente **se reconecta solo** (reintenta cada 2 s durante 1 minuto, sin pedir PIN) y retoma el stream con la misma configuración.
 
