@@ -52,11 +52,16 @@ void App::draw_stream_toolbar() {
 
     // Resolución
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(130 * scale_);
-    if (ImGui::BeginCombo("##tres", std::string{to_string(s.resolution)}.c_str())) {
+    const Size here = display_size();
+    auto res_label = [&](ResolutionPreset r) {
+        return r == ResolutionPreset::ClientNative ? std::format("Igual a esta pantalla ({}x{})", here.width, here.height)
+                                                   : std::string{to_string(r)};
+    };
+    ImGui::SetNextItemWidth(200 * scale_);
+    if (ImGui::BeginCombo("##tres", res_label(s.resolution).c_str())) {
         for (int i = 0; i < static_cast<int>(ResolutionPreset::Custom); ++i) {
             const auto r = static_cast<ResolutionPreset>(i);
-            if (ImGui::Selectable(std::string{to_string(r)}.c_str(), s.resolution == r)) {
+            if (ImGui::Selectable(res_label(r).c_str(), s.resolution == r)) {
                 s.resolution = r;
                 changed = true;
             }
@@ -67,16 +72,24 @@ void App::draw_stream_toolbar() {
 
     // FPS
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(80 * scale_);
-    if (ImGui::BeginCombo("##tfps", std::format("{} fps", s.fps).c_str())) {
+    const std::uint32_t here_hz = display_hz();
+    ImGui::SetNextItemWidth(110 * scale_);
+    const std::string fps_label = s.fps_match_display ? std::format("{} fps (pantalla)", std::max(here_hz, 30u)) : std::format("{} fps", s.fps);
+    if (ImGui::BeginCombo("##tfps", fps_label.c_str())) {
+        if (ImGui::Selectable(std::format("Igual a esta pantalla ({} Hz)", here_hz).c_str(), s.fps_match_display)) {
+            s.fps_match_display = true;
+            changed = true;
+        }
         for (const std::uint32_t f : {30u, 60u, 90u, 120u, 144u, 165u, 240u}) {
-            if (ImGui::Selectable(std::format("{} fps", f).c_str(), s.fps == f)) {
+            if (ImGui::Selectable(std::format("{} fps", f).c_str(), !s.fps_match_display && s.fps == f)) {
                 s.fps = f;
+                s.fps_match_display = false;
                 changed = true;
             }
         }
         ImGui::EndCombo();
     }
+    ImGui::SetItemTooltip("Más FPS que los Hz de esta pantalla no se ven, pero cargan al codificador del host");
 
     // Monitor
     ImGui::SameLine();

@@ -370,6 +370,10 @@ int App::run() {
             settings_dirty_ = false;
         }
         poll_service_action();
+        if (now - display_checked_us_ > 1'000'000) {
+            display_checked_us_ = now;
+            follow_display();
+        }
         if (!service_busy_ && now - service_checked_us_ > 5'000'000) {
             service_checked_us_ = now;
             refresh_service_status();
@@ -506,7 +510,10 @@ void App::apply_min_latency() {
             for (const auto& m : info->monitors) {
                 if (s.monitor_id == 0 || m.id == s.monitor_id) hz = std::max(hz, m.refresh_hz);
             }
-            if (hz >= 30) s.fps = hz;
+            if (hz >= 30) {
+                s.fps = hz;
+                s.fps_match_display = false;
+            }
         }
     }
     settings_.client.active_profile.clear();

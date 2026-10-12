@@ -31,6 +31,7 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("custom_width", static_cast<std::int64_t>(s.custom_width));
     t.set("custom_height", static_cast<std::int64_t>(s.custom_height));
     t.set("fps", static_cast<std::int64_t>(s.fps));
+    t.set("fps_match_display", s.fps_match_display);
     t.set("codec", std::string{kCodecNames[static_cast<int>(s.codec)]});
     t.set("auto_bitrate", s.auto_bitrate);
     t.set("bitrate_mbps", static_cast<std::int64_t>(s.bitrate_mbps));
@@ -57,6 +58,7 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.custom_width = clamp_u32(t.get_int("custom_width").value_or(s.custom_width), 320, 7680);
     s.custom_height = clamp_u32(t.get_int("custom_height").value_or(s.custom_height), 240, 4320);
     s.fps = clamp_u32(t.get_int("fps").value_or(s.fps), 10, 360);
+    s.fps_match_display = t.get_bool("fps_match_display").value_or(false);
     s.codec = enum_from(t.get_string("codec").value_or(""), kCodecNames, s.codec);
     s.auto_bitrate = t.get_bool("auto_bitrate").value_or(s.auto_bitrate);
     s.bitrate_mbps = clamp_u32(t.get_int("bitrate_mbps").value_or(s.bitrate_mbps), kMinBitrateMbps, kMaxBitrateMbps);
@@ -111,7 +113,7 @@ std::string_view to_string(ScalingMode s) noexcept {
 std::string_view to_string(ResolutionPreset r) noexcept {
     switch (r) {
         case ResolutionPreset::ClientNative:
-            return "Nativa del cliente";
+            return "Igual a esta pantalla";
         case ResolutionPreset::R720:
             return "720p";
         case ResolutionPreset::R1080:
@@ -134,6 +136,7 @@ std::string settings_to_toml(const AppSettings& s) {
     root.set("start_with_windows", s.start_with_windows);
     root.set("minimize_to_tray", s.minimize_to_tray);
     root.set("check_updates", s.check_updates);
+    root.set("defaults_version", static_cast<std::int64_t>(s.defaults_version));
 
     toml::Table& h = doc.table_mut("host");
     h.set("enabled", s.host.enabled);
@@ -180,6 +183,9 @@ AppSettings settings_from_toml(std::string_view text) {
         s.start_with_windows = root->get_bool("start_with_windows").value_or(s.start_with_windows);
         s.minimize_to_tray = root->get_bool("minimize_to_tray").value_or(s.minimize_to_tray);
         s.check_updates = root->get_bool("check_updates").value_or(s.check_updates);
+        s.defaults_version = clamp_u32(root->get_int("defaults_version").value_or(0), 0, 1000);
+    } else {
+        s.defaults_version = 0;
     }
     if (const toml::Table* h = doc.table("host")) {
         s.host.enabled = h->get_bool("enabled").value_or(s.host.enabled);
@@ -219,6 +225,13 @@ AppSettings settings_from_toml(std::string_view text) {
     } else {
         s.client.profiles = default_profiles();
     }
+    if (s.defaults_version < 2) {
+        // 1.4: el cliente pide por defecto su propia resolución y frecuencia (antes podía quedar, por ejemplo,
+        // 1440p hacia una pantalla de 1080p: el doble de trabajo para el codificador sin ganar nitidez).
+        s.client.stream.resolution = ResolutionPreset::ClientNative;
+        s.client.stream.fps_match_display = true;
+    }
+    s.defaults_version = kDefaultsVersion;
     return s;
 }
 
@@ -235,6 +248,7 @@ std::vector<Profile> default_profiles() {
     Profile game{"Juego 144 Hz", {}};
     game.stream.resolution = ResolutionPreset::ClientNative;
     game.stream.fps = 144;
+    game.stream.fps_match_display = true;
     game.stream.codec = CodecChoice::Auto;
     game.stream.vsync = false;
     out.push_back(game);

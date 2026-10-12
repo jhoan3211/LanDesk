@@ -79,6 +79,11 @@ private:
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
     void apply_min_latency();
+    // Resolución y frecuencia del monitor donde está la ventana del cliente.
+    [[nodiscard]] Size display_size() const;
+    [[nodiscard]] std::uint32_t display_hz() const;
+    [[nodiscard]] std::uint32_t requested_fps(const StreamSettings& s) const;
+    void follow_display();
     void update_presentation_mode();
     bool sample_matches(ID3D11Texture2D* backbuffer, const Rect& view, const client::LatencyTarget& target);
     void switch_monitor(std::uint32_t id);
@@ -154,6 +159,9 @@ private:
     bool show_menu_ = false;
     bool show_stats_ = false;
     std::uint64_t toolbar_until_us_ = 0;  // La barra superior se muestra hasta este instante.
+    Size followed_display_;               // Pantalla para la que se pidió el stream ("Igual a esta pantalla").
+    std::uint32_t followed_hz_ = 0;
+    std::uint64_t display_checked_us_ = 0;
     bool relative_mouse_ = false;
     std::optional<PointF> pending_mouse_;
     std::uint64_t last_mouse_send_us_ = 0;

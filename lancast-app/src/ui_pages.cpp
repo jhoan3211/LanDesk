@@ -235,16 +235,26 @@ void App::draw_stream_settings(bool live) {
         // FPS
         row("FPS");
         static const int kFps[] = {30, 60, 90, 120, 144, 165, 240};
-        if (ImGui::BeginCombo("##fps", std::to_string(s.fps).c_str())) {
+        const std::string fps_label =
+            s.fps_match_display ? std::format("Igual a esta pantalla ({} Hz)", display_hz()) : std::to_string(s.fps);
+        if (ImGui::BeginCombo("##fps", fps_label.c_str())) {
+            if (ImGui::Selectable(std::format("Igual a esta pantalla ({} Hz)", display_hz()).c_str(), s.fps_match_display)) {
+                s.fps_match_display = true;
+                changed = true;
+            }
             for (const int f : kFps) {
-                if (ImGui::Selectable(std::to_string(f).c_str(), static_cast<int>(s.fps) == f)) {
+                if (ImGui::Selectable(std::to_string(f).c_str(), !s.fps_match_display && static_cast<int>(s.fps) == f)) {
                     s.fps = static_cast<std::uint32_t>(f);
+                    s.fps_match_display = false;
                     changed = true;
                 }
             }
             int custom = static_cast<int>(s.fps);
             ImGui::SetNextItemWidth(120 * scale_);
-            if (ImGui::InputInt("Personalizado", &custom, 1, 10)) s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
+            if (ImGui::InputInt("Personalizado", &custom, 1, 10)) {
+                s.fps = static_cast<std::uint32_t>(std::clamp(custom, 10, 360));
+                s.fps_match_display = false;
+            }
             if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
             ImGui::EndCombo();
         }
@@ -271,7 +281,7 @@ void App::draw_stream_settings(bool live) {
             const Size req = requested_size(s, backbuffer_size_.width ? Size{2560, 1440} : Size{1920, 1080});
             const Codec c = s.codec == CodecChoice::H264 ? Codec::H264 : Codec::Hevc;
             ImGui::SameLine();
-            ImGui::TextColored(kMuted, "≈ %u Mbps", auto_bitrate_mbps(req.width, req.height, s.fps, c));
+            ImGui::TextColored(kMuted, "≈ %u Mbps", auto_bitrate_mbps(req.width, req.height, requested_fps(s), c));
         } else {
             int mbps = static_cast<int>(s.bitrate_mbps);
             ImGui::AlignTextToFramePadding();

@@ -43,18 +43,52 @@ bool App::control_enabled() const {
     return info && info->input_allowed;
 }
 
-proto::StreamConfig App::make_stream_config() const {
-    const StreamSettings& s = settings_.client.stream;
+Size App::display_size() const {
     MONITORINFO mi{sizeof(mi)};
     GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mi);
-    const Size native{static_cast<std::uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left),
-                      static_cast<std::uint32_t>(mi.rcMonitor.bottom - mi.rcMonitor.top)};
-    const Size req = requested_size(s, native);
+    return Size{static_cast<std::uint32_t>(mi.rcMonitor.right - mi.rcMonitor.left),
+                static_cast<std::uint32_t>(mi.rcMonitor.bottom - mi.rcMonitor.top)};
+}
+
+std::uint32_t App::display_hz() const {
+    MONITORINFOEXW mix{};
+    mix.cbSize = sizeof(mix);
+    GetMonitorInfoW(MonitorFromWindow(hwnd_, MONITOR_DEFAULTTONEAREST), &mix);
+    DEVMODEW dm{};
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsW(mix.szDevice, ENUM_CURRENT_SETTINGS, &dm) && dm.dmDisplayFrequency > 1) {
+        return dm.dmDisplayFrequency;
+    }
+    return 60;
+}
+
+std::uint32_t App::requested_fps(const StreamSettings& s) const {
+    return s.fps_match_display ? std::max<std::uint32_t>(display_hz(), 30) : s.fps;
+}
+
+// Con "Igual a esta pantalla": si la ventana pasa a otro monitor (u otra resolución/frecuencia), se pide de nuevo.
+void App::follow_display() {
+    const StreamSettings& s = settings_.client.stream;
+    if (!streaming() || (s.resolution != ResolutionPreset::ClientNative && !s.fps_match_display)) return;
+    const Size size = display_size();
+    const std::uint32_t hz = display_hz();
+    if (size == followed_display_ && hz == followed_hz_) return;
+    const bool first = followed_hz_ == 0;
+    followed_display_ = size;
+    followed_hz_ = hz;
+    if (first) return;  // El stream actual ya se pidió para esta pantalla.
+    session_->request_stream(make_stream_config());
+    toast(std::format("Ajustado a esta pantalla: {}x{} @ {} Hz", size.width, size.height, hz));
+}
+
+proto::StreamConfig App::make_stream_config() const {
+    const StreamSettings& s = settings_.client.stream;
+    const Size req = requested_size(s, display_size());
     proto::StreamConfig c;
     c.monitor_id = s.monitor_id;
     c.max_width = req.width;
     c.max_height = req.height;
-    c.fps = s.fps;
+    c.fps = requested_fps(s);
     c.codec = s.codec;
     c.auto_bitrate = s.auto_bitrate;
     c.bitrate_kbps = s.bitrate_mbps * 1000;
@@ -73,6 +107,8 @@ proto::StreamConfig App::make_stream_config() const {
 
 void App::apply_stream_settings() {
     save_settings();
+    followed_display_ = display_size();
+    followed_hz_ = display_hz();
     if (session_ && session_->state() == client::State::Connected) session_->request_stream(make_stream_config());
 }
 
