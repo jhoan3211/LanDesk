@@ -8,6 +8,9 @@
 
 #include "lancast/core/log.hpp"
 
+// Última versión del driver: el proyecto terminó en 2023 (archivado, sin más actualizaciones).
+#define URL_VIGEM "https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0"
+
 namespace lancast::gamepad {
 
 bool driver_available() {
@@ -36,7 +39,7 @@ struct VirtualPads::Impl {
             if (client != nullptr) vigem_free(client);
             client = nullptr;
             failed = true;
-            log::warn("Mando: no está instalado el driver ViGEmBus (https://github.com/nefarius/ViGEmBus/releases)");
+            log::warn("Mando: no está instalado el driver ViGEmBus 1.22.0 (" URL_VIGEM ")");
             return false;
         }
         return true;

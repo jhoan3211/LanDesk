@@ -171,7 +171,7 @@ class MainActivity : Activity() {
                 "Gestos: un dedo mueve el cursor · toque = clic · dos dedos = clic derecho / rueda · pellizcar = zoom · " +
                 "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.\n\n" +
                 "También funcionan el S Pen, un mouse o teclado Bluetooth y los mandos (en el PC aparecen como mando de Xbox; " +
-                "requiere el driver ViGEmBus en el PC). Para despertar un PC dormido, toca ⋯ en Equipos emparejados.",
+                "requiere el driver ViGEmBus 1.22.0 en el PC). Para despertar un PC dormido, toca ⋯ en Equipos emparejados.",
             12f, Ui.MUTED).apply { margins(top = dp(20)) })
 
         return ScrollView(this).apply {
