@@ -3,6 +3,11 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar.
 
+## 1.5.2
+
+### PC
+- **Arreglo: la ventana del stream quedaba negra según su tamaño.** Con el escalado en *1:1*, si la ventana era más chica que la imagen del stream (por ejemplo, ver un PC de 1080p en una ventana menor a 1920x1080), la imagen se salía de la ventana y el procesador de video de la GPU se negaba a dibujarla. Ahora se recorta a la ventana y se ve la parte central, pixel por pixel. Una prueba recorre 2016 combinaciones de tamaño de ventana y modo de escalado.
+
 ## 1.5.1
 
 ### App para Android

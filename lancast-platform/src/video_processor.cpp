@@ -1,5 +1,7 @@
 #include "lancast/platform/video_processor.hpp"
 
+#include <cmath>
+
 #include "lancast/core/log.hpp"
 #include "win.hpp"
 
@@ -89,8 +91,33 @@ bool VideoProcessor::process(ID3D11Texture2D* input, UINT input_slice, ID3D11Tex
 
     const RECT full_in{0, 0, static_cast<LONG>(input_.width), static_cast<LONG>(input_.height)};
     const RECT full_out{0, 0, static_cast<LONG>(output_.width), static_cast<LONG>(output_.height)};
-    ctx->VideoProcessorSetStreamSourceRect(proc, 0, TRUE, src != nullptr ? src : &full_in);
-    ctx->VideoProcessorSetStreamDestRect(proc, 0, TRUE, dst != nullptr ? dst : &full_out);
+    RECT s = src != nullptr ? *src : full_in;
+    RECT d = dst != nullptr ? *dst : full_out;
+    // El procesador rechaza un destino que se sale de la salida (p. ej. escala 1:1 en una ventana más chica que el
+    // stream: la ventana quedaba negra). Se recorta el destino y el origen en la misma proporción.
+    if (rotation == 0 && d.right > d.left && d.bottom > d.top) {
+        const double kx = static_cast<double>(s.right - s.left) / static_cast<double>(d.right - d.left);
+        const double ky = static_cast<double>(s.bottom - s.top) / static_cast<double>(d.bottom - d.top);
+        if (d.left < 0) {
+            s.left += static_cast<LONG>(std::lround(-d.left * kx));
+            d.left = 0;
+        }
+        if (d.top < 0) {
+            s.top += static_cast<LONG>(std::lround(-d.top * ky));
+            d.top = 0;
+        }
+        if (d.right > full_out.right) {
+            s.right -= static_cast<LONG>(std::lround((d.right - full_out.right) * kx));
+            d.right = full_out.right;
+        }
+        if (d.bottom > full_out.bottom) {
+            s.bottom -= static_cast<LONG>(std::lround((d.bottom - full_out.bottom) * ky));
+            d.bottom = full_out.bottom;
+        }
+        if (s.right <= s.left || s.bottom <= s.top || d.right <= d.left || d.bottom <= d.top) return true;  // Nada visible.
+    }
+    ctx->VideoProcessorSetStreamSourceRect(proc, 0, TRUE, &s);
+    ctx->VideoProcessorSetStreamDestRect(proc, 0, TRUE, &d);
     ctx->VideoProcessorSetOutputTargetRect(proc, TRUE, &full_out);
 
     D3D11_VIDEO_COLOR bg{};
