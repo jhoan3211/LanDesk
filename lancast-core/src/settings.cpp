@@ -164,6 +164,8 @@ std::string settings_to_toml(const AppSettings& s) {
     c.set("relative_mouse", s.client.relative_mouse);
     c.set("show_stats", s.client.show_stats);
     c.set("simulate_loss_percent", static_cast<std::int64_t>(s.client.simulate_loss_percent));
+    c.set("toolbar_collapsed", s.client.toolbar_collapsed);
+    c.set("toolbar_tab_percent", static_cast<std::int64_t>(s.client.toolbar_tab_percent));
     stream_to_table(s.client.stream, doc.table_mut("client.stream"));
 
     auto& profiles = doc.arrays["client.profiles"];
@@ -213,6 +215,8 @@ AppSettings settings_from_toml(std::string_view text) {
         s.client.relative_mouse = c->get_bool("relative_mouse").value_or(s.client.relative_mouse);
         s.client.show_stats = c->get_bool("show_stats").value_or(s.client.show_stats);
         s.client.simulate_loss_percent = clamp_u32(c->get_int("simulate_loss_percent").value_or(0), 0, 50);
+        s.client.toolbar_collapsed = c->get_bool("toolbar_collapsed").value_or(false);
+        s.client.toolbar_tab_percent = clamp_u32(c->get_int("toolbar_tab_percent").value_or(100), 50, 300);
     }
     if (const toml::Table* st = doc.table("client.stream")) s.client.stream = stream_from_table(*st);
 

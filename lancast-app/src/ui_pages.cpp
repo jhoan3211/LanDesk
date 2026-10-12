@@ -670,6 +670,14 @@ void App::draw_settings_page() {
 
     section("Cliente");
     changed |= ImGui::Checkbox("Modo solo ver (no enviar mouse ni teclado)", &settings_.client.view_only);
+    changed |= ImGui::Checkbox("Barra del stream oculta (arriba solo aparece una flecha pequeña)",
+                               &settings_.client.toolbar_collapsed);
+    int tab = static_cast<int>(settings_.client.toolbar_tab_percent);
+    ImGui::SetNextItemWidth(220 * scale_);
+    if (ImGui::SliderInt("Tamaño de la ✕ y la flecha de la barra", &tab, 50, 300, "%d %%")) {
+        settings_.client.toolbar_tab_percent = static_cast<std::uint32_t>(tab);
+        changed = true;
+    }
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.client.clipboard_sync);
     int loss = static_cast<int>(settings_.client.simulate_loss_percent);
     ImGui::SetNextItemWidth(220 * scale_);

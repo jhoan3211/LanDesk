@@ -113,6 +113,12 @@ private:
     void draw_stream_overlay();
     void draw_stats_overlay();
     void draw_stream_toolbar();
+    struct TabResult {
+        bool clicked = false;
+        bool hovered = false;
+    };
+    // Pestaña pequeña centrada arriba: con ✕ (debajo de la barra) o con una flecha (barra oculta).
+    TabResult draw_toolbar_tab(bool close_icon, float y);
     void draw_pin_modal();
     void draw_toast();
     void toast(std::string text);
@@ -159,6 +165,7 @@ private:
     bool show_menu_ = false;
     bool show_stats_ = false;
     std::uint64_t toolbar_until_us_ = 0;  // La barra superior se muestra hasta este instante.
+    std::uint64_t toolbar_tab_until_us_ = 0;  // Barra oculta: el ícono para volver a mostrarla, hasta este instante.
     Size followed_display_;               // Pantalla para la que se pidió el stream ("Igual a esta pantalla").
     std::uint32_t followed_hz_ = 0;
     std::uint64_t display_checked_us_ = 0;

@@ -84,6 +84,9 @@ struct ClientSettings {
     bool relative_mouse = false;
     bool show_stats = false;
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
+    // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.
+    bool toolbar_collapsed = false;
+    std::uint32_t toolbar_tab_percent = 100;
 };
 
 // 2 (1.4): resolución y FPS "Igual a esta pantalla" por defecto.
