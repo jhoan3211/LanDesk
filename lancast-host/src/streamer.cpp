@@ -305,15 +305,21 @@ void Streamer::run() {
             const DXGI_FORMAT tex_format = at.hdr ? DXGI_FORMAT_P010 : DXGI_FORMAT_NV12;
             next->vp.reset();
             next->packer.reset();
-            if (at.chroma_444 || at.hdr) {
+            // La conversión por shader es más rápida que el procesador de video de la GPU (medido en una AMD: 0,7 ms
+            // contra 2,5 ms de 1440p a 1080p). El procesador solo se usa con el monitor girado (el shader no rota)
+            // o si el shader no se pudo crear.
+            if (at.chroma_444 || at.hdr || next->capture->rotation() == 0) {
                 gpu::PackConfig pc{next->capture->texture_size(), next->capture->format(), stream_size, at.chroma_444, at.hdr};
-                auto packer = gpu::YuvPacker::create(next->device, pc);
-                if (!packer) {
+                if (auto packer = gpu::YuvPacker::create(next->device, pc)) {
+                    next->packer = std::move(*packer);
+                } else if (at.chroma_444 || at.hdr) {
                     log::warn("Conversión por shader no disponible: {}", packer.error().message());
                     continue;
+                } else {
+                    log::warn("Conversión por shader no disponible ({}): se usa el procesador de video", packer.error().message());
                 }
-                next->packer = std::move(*packer);
-            } else {
+            }
+            if (!next->packer) {
                 auto vp = gpu::VideoProcessor::create(next->device, next->capture->texture_size(), stream_size,
                                                       gpu::ColorConversion::RgbToYuv709);
                 if (!vp) return fail(vp.error().message());
