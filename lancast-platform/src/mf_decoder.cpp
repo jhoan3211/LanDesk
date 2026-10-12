@@ -54,10 +54,11 @@ public:
         if (activate_) activate_->ShutdownObject();
     }
 
-    static platform::Result<std::unique_ptr<MfDecoder>> create(const gpu::Device& device, Codec codec, Size size) {
+    static platform::Result<std::unique_ptr<MfDecoder>> create(const gpu::Device& device, Codec codec, Size size, bool ten_bit) {
         std::unique_ptr<MfDecoder> d{new MfDecoder()};
         d->codec_ = codec;
         d->size_ = size;
+        d->ten_bit_ = ten_bit;
         if (auto r = d->init(device); !r) return std::unexpected(r.error());
         return d;
     }
@@ -142,9 +143,10 @@ private:
         in_type->SetGUID(MF_MT_SUBTYPE, video_subtype(codec_));
         MFSetAttributeSize(in_type.Get(), MF_MT_FRAME_SIZE, size_.width, size_.height);
         in_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+        if (ten_bit_ && codec_ == Codec::Hevc) in_type->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH265VProfile_Main_420_10);
         hr = transform_->SetInputType(0, in_type.Get(), 0);
         if (FAILED(hr)) return platform::detail::hr_error("Decodificador: SetInputType", hr);
-        if (auto r = select_output_type(); !r) return r;
+        if (auto r = select_output_type(true); !r) return r;
 
         transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
         transform_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
@@ -152,12 +154,30 @@ private:
         return {};
     }
 
-    platform::Result<void> select_output_type() {
+    // initial: antes de ver el primer cuadro algunos decodificadores solo ofrecen NV12 aunque el stream sea de
+    // 10 bits; P010 aparece con el cambio de formato (MF_E_TRANSFORM_STREAM_CHANGE) al leer la cabecera.
+    platform::Result<void> select_output_type(bool initial = false) {
+        if (ten_bit_ && has_output_type(MFVideoFormat_P010)) return set_output_type(MFVideoFormat_P010);
+        if (ten_bit_ && !initial) return std::unexpected(platform::Error{"El decodificador no ofrece salida P010 (10 bits)", 0});
+        return set_output_type(MFVideoFormat_NV12);
+    }
+
+    bool has_output_type(const GUID& wanted) {
         ComPtr<IMFMediaType> type;
         for (DWORD i = 0; SUCCEEDED(transform_->GetOutputAvailableType(0, i, &type)); ++i, type.Reset()) {
             GUID sub{};
             type->GetGUID(MF_MT_SUBTYPE, &sub);
-            if (sub == MFVideoFormat_NV12) {
+            if (sub == wanted) return true;
+        }
+        return false;
+    }
+
+    platform::Result<void> set_output_type(const GUID& wanted) {
+        ComPtr<IMFMediaType> type;
+        for (DWORD i = 0; SUCCEEDED(transform_->GetOutputAvailableType(0, i, &type)); ++i, type.Reset()) {
+            GUID sub{};
+            type->GetGUID(MF_MT_SUBTYPE, &sub);
+            if (sub == wanted) {
                 const HRESULT hr = transform_->SetOutputType(0, type.Get(), 0);
                 if (FAILED(hr)) return platform::detail::hr_error("Decodificador: SetOutputType", hr);
                 UINT32 w = 0;
@@ -173,7 +193,9 @@ private:
                 return {};
             }
         }
-        return std::unexpected(platform::Error{"El decodificador no ofrece salida NV12", 0});
+        return std::unexpected(platform::Error{wanted == MFVideoFormat_P010 ? "El decodificador no ofrece salida P010 (10 bits)"
+                                                                            : "El decodificador no ofrece salida NV12",
+                                               0});
     }
 
     platform::Result<void> drain(std::optional<DecodedFrame>& frame) {
@@ -212,6 +234,7 @@ private:
     Codec codec_ = Codec::H264;
     Size size_;
     Size visible_;
+    bool ten_bit_ = false;
     std::string name_ = "MFT";
     ComPtr<IMFActivate> activate_;
     ComPtr<IMFTransform> transform_;
@@ -220,8 +243,8 @@ private:
 
 }  // namespace
 
-platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size) {
-    auto d = MfDecoder::create(device, codec, size);
+platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size, bool ten_bit) {
+    auto d = MfDecoder::create(device, codec, size, ten_bit);
     if (!d) return std::unexpected(d.error());
     return std::unique_ptr<Decoder>{std::move(*d)};
 }
