@@ -44,22 +44,31 @@ class MainActivity : Activity() {
         storage = Storage(this)
         WifiBinding.start(this)
         setContentView(build())
-        checkUpdate()
     }
 
     // ------------------------------------------------------------------------------------------- actualización
 
-    private fun checkUpdate() {
+    // Automática: al abrir la app, como mucho cada 6 h. Manual: botón "Buscar actualizaciones" (avisa el resultado).
+    private fun checkUpdate(manual: Boolean) {
         val now = System.currentTimeMillis()
-        if (now - storage.lastUpdateCheck < 6 * 3600_000L) return
+        if (!manual && now - storage.lastUpdateCheck < 6 * 3600_000L) return
+        if (manual) Toast.makeText(this, "Buscando actualizaciones…", Toast.LENGTH_SHORT).show()
         thread(name = "lancast-update", isDaemon = true) {
             val release = try {
                 Updater.check(this)
             } catch (_: Exception) {
-                return@thread  // Sin internet: se intenta en otro momento.
+                // Sin internet: la automática se intenta en otro momento.
+                if (manual) ui.post { Toast.makeText(this, "No se pudo consultar GitHub (¿hay internet?)", Toast.LENGTH_LONG).show() }
+                return@thread
             }
             storage.lastUpdateCheck = now
-            if (release != null) ui.post { showUpdate(release) }
+            ui.post {
+                if (release != null) {
+                    showUpdate(release)
+                } else if (manual) {
+                    Toast.makeText(this, "Ya tienes la última versión (${Updater.currentVersion(this)})", Toast.LENGTH_LONG).show()
+                }
+            }
         }
     }
 
@@ -73,7 +82,12 @@ class MainActivity : Activity() {
         if (!Updater.canInstall(this)) {
             AlertDialog.Builder(this).setTitle("Permitir actualizaciones")
                 .setMessage("Android pide permitir que LanCast instale su propia actualización. Activa \"Permitir de esta fuente\" y vuelve.")
-                .setPositiveButton("Abrir ajustes") { _, _ -> Updater.openInstallPermission(this) }
+                .setPositiveButton("Abrir ajustes") { _, _ ->
+                    if (!Updater.openInstallPermission(this)) {
+                        AlertDialog.Builder(this).setMessage("Abre Ajustes → Apps → Acceso especial → Instalar apps desconocidas → " +
+                            "LanCast y actívalo. Luego vuelve y toca Actualizar.").setPositiveButton("Entendido", null).show()
+                    }
+                }
                 .setNegativeButton("Cancelar", null).show()
             return
         }
@@ -98,6 +112,7 @@ class MainActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
+        checkUpdate(manual = false)
         refreshPaired()
         scanning = true
         scanLoop()
@@ -165,13 +180,15 @@ class MainActivity : Activity() {
         col.addView(option("Control táctil", listOf("true" to "Touchpad", "false" to "Directo"), { storage.touchpad.toString() },
             { storage.touchpad = it == "true" }))
         col.addView(button("Nombre de este teléfono") { editName() }.apply { margins(top = dp(8)) })
+        col.addView(button("Buscar actualizaciones (versión ${Updater.currentVersion(this)})") { checkUpdate(manual = true) }
+            .apply { margins(top = dp(8)) })
 
         col.addView(text(
             "Necesitas LanCast 1.5 o superior en el PC y estar en la misma red. La primera vez el PC muestra un PIN de 6 dígitos.\n\n" +
                 "Gestos: un dedo mueve el cursor · toque = clic · dos dedos = clic derecho / rueda · pellizcar = zoom · " +
                 "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.\n\n" +
                 "También funcionan el S Pen, un mouse o teclado Bluetooth y los mandos (en el PC aparecen como mando de Xbox; " +
-                "requiere el driver ViGEmBus en el PC). Para despertar un PC dormido, toca ⋯ en Equipos emparejados.",
+                "requiere el driver ViGEmBus 1.22.0 en el PC). Para despertar un PC dormido, toca ⋯ en Equipos emparejados.",
             12f, Ui.MUTED).apply { margins(top = dp(20)) })
 
         return ScrollView(this).apply {

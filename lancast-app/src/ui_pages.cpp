@@ -712,7 +712,9 @@ void App::draw_settings_page() {
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.client.clipboard_sync);
     changed |= ImGui::Checkbox("Enviar los mandos de este PC al host", &settings_.client.forward_gamepads);
     help("Los mandos de Xbox (XInput) conectados aquí aparecen en el host como mandos de Xbox 360. El host necesita "
-         "el driver gratuito ViGEmBus (github.com/nefarius/ViGEmBus/releases); sin él, los mandos se ignoran.");
+         "el driver ViGEmBus 1.22.0 (github.com/nefarius/ViGEmBus/releases/tag/v1.22.0); sin él, los mandos se "
+         "ignoran. Es gratuito, pero su autor lo dejó de mantener en 2023: es la última versión y no tendrá más "
+         "actualizaciones.");
     int loss = static_cast<int>(settings_.client.simulate_loss_percent);
     ImGui::SetNextItemWidth(220 * scale_);
     if (ImGui::SliderInt("Simular pérdida de paquetes (pruebas)", &loss, 0, 20, "%d %%")) {

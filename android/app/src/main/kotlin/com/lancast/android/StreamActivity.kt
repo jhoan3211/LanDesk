@@ -924,8 +924,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         }
         if (session?.hostInfo?.gamepadAvailable != true) {
             AlertDialog.Builder(this).setTitle("Mando")
-                .setMessage("Para usar mandos, el PC necesita el driver gratuito ViGEmBus " +
-                    "(github.com/nefarius/ViGEmBus/releases) y permitir el control. Instálalo en el PC y vuelve a conectar.")
+                .setMessage("Para usar mandos, el PC necesita el driver ViGEmBus 1.22.0 " +
+                    "(github.com/nefarius/ViGEmBus/releases/tag/v1.22.0) y permitir el control. Es gratuito y funciona en " +
+                    "Windows 10 y 11, pero su autor lo dejó de mantener en 2023: es la última versión y no tendrá más " +
+                    "actualizaciones. Instálalo en el PC y vuelve a conectar.")
                 .setPositiveButton("Entendido", null).show()
             return
         }

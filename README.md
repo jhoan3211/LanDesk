@@ -46,7 +46,7 @@ La app usa el decodificador de **hardware** del teléfono en modo de baja latenc
 
 Además:
 - **S Pen, mouse y teclado Bluetooth**: el puntero va donde apuntas (punta o botón izquierdo = clic, botón del lápiz o derecho = clic derecho, rueda); el teclado físico manda teclas reales (atajos y juegos).
-- **Mandos**: un mando conectado al teléfono o el **mando en pantalla** (botón *Mando*) aparece en el PC como mando de Xbox 360. En el PC hace falta el driver gratuito [ViGEmBus](https://github.com/nefarius/ViGEmBus/releases).
+- **Mandos**: un mando conectado al teléfono o el **mando en pantalla** (botón *Mando*) aparece en el PC como mando de Xbox 360. En el PC hace falta el driver gratuito [ViGEmBus 1.22.0](https://github.com/nefarius/ViGEmBus/releases/tag/v1.22.0). Es la versión 1.22.0, la última: su autor dejó de mantenerlo en 2023 (no tendrá más actualizaciones), pero funciona en Windows 10 y 11. Si ya tenías una versión anterior, puede que haya que ejecutar el instalador dos veces.
 - **Portapapeles** en los dos sentidos y **archivos** (botón *Archivos*; lo recibido va a *Descargas/LanCast*).
 - **Gráficos** en tiempo real (latencia, decodificación, bitrate, FPS y pérdidas).
 - **Despertar un PC** apagado o suspendido: *Equipos emparejados* → ⋯ → *Despertar* (Wake-on-LAN activado en la BIOS y en la tarjeta de red del PC).

@@ -1,6 +1,8 @@
 #pragma once
 
-// Mandos virtuales de Xbox 360 en el host (driver ViGEmBus). Sin el driver no se crea nada y el host lo anuncia
+// Mandos virtuales de Xbox 360 en el host (driver ViGEmBus 1.22.0, la última versión: el proyecto se archivó en
+// 2023 y no tendrá más actualizaciones; Windows no ofrece otra forma de crear un mando XInput sin un driver; se
+// probó InputInjector y ni XInput ni Windows.Gaming.Input ven ese mando). Sin el driver no se crea nada y el host lo anuncia
 // en HostInfo (gamepad_available = false) para que el cliente lo explique.
 
 #include <array>

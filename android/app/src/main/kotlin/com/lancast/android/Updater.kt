@@ -98,8 +98,17 @@ object Updater {
     // Android 8+: la app necesita el permiso "Instalar apps desconocidas" (una sola vez).
     fun canInstall(context: Context) = context.packageManager.canRequestPackageInstalls()
 
-    fun openInstallPermission(activity: Activity) {
-        activity.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${activity.packageName}")))
+    // Algunos teléfonos no tienen esa pantalla de ajustes: se abre la de la app y, si tampoco, se explica dónde está.
+    fun openInstallPermission(activity: Activity): Boolean {
+        val pkg = Uri.parse("package:${activity.packageName}")
+        for (intent in listOf(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, pkg), Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, pkg))) {
+            try {
+                activity.startActivity(intent)
+                return true
+            } catch (_: android.content.ActivityNotFoundException) {
+            }
+        }
+        return false
     }
 
     fun install(activity: Activity, apk: File, onError: (String) -> Unit) {
