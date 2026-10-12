@@ -1,6 +1,9 @@
 // Host de LanCast para pruebas de interoperabilidad (cliente Android/Kotlin contra el host real).
 //
-//   lancast-test-host <puerto_control> <carpeta_de_datos>
+//   lancast-test-host <puerto_control> <carpeta_de_datos> [carpeta_de_datos_de_un_cliente]
+//
+// Con la carpeta de un cliente, deja a ese cliente ya emparejado (escribe el mismo secreto en los dos lados), para
+// abrir la interfaz de prueba sin escribir el PIN.
 //
 // Imprime "READY" cuando acepta conexiones y "PIN <6 dígitos>" cuando un cliente pide emparejarse. El control
 // remoto está desactivado (no mueve el mouse ni escribe en el equipo). Termina al cerrarse su entrada estándar.
@@ -18,6 +21,7 @@
 #include "lancast/platform/crypto.hpp"
 #include "lancast/platform/mf_codec.hpp"
 #include "lancast/platform/net.hpp"
+#include "lancast/platform/system.hpp"
 
 using namespace lancast;
 
@@ -40,6 +44,17 @@ int main(int argc, char** argv) {
         std::array<std::uint8_t, 16> id{};
         crypto::random_bytes(id);
         s.device_id = to_hex(id);
+        if (argc >= 4) {
+            // Emparejamiento previo con el cliente de prueba (secreto compartido de 32 bytes).
+            const std::filesystem::path client_dir = argv[3];
+            std::vector<std::uint8_t> secret(32);
+            crypto::random_bytes(secret);
+            SetEnvironmentVariableW(L"LANCAST_DATA_DIR", client_dir.c_str());
+            const AppSettings client = sys::load_settings();  // Crea el id del cliente si no existe.
+            sys::save_paired({sys::PairedDevice{s.device_id, "Host-Interop", "127.0.0.1:" + std::to_string(port), secret, "host"}});
+            SetEnvironmentVariableW(L"LANCAST_DATA_DIR", dir.c_str());
+            sys::save_paired({sys::PairedDevice{client.device_id, client.device_name, "127.0.0.1", secret, "client"}});
+        }
         s.device_name = "Host-Interop";
         s.host.control_port = port;
         s.host.media_port = static_cast<std::uint16_t>(port + 14);

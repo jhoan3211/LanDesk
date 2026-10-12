@@ -83,6 +83,7 @@ struct ClientSettings {
     bool clipboard_sync = true;
     bool relative_mouse = false;
     bool show_stats = false;
+    bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
     // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.
     bool toolbar_collapsed = false;

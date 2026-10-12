@@ -586,6 +586,11 @@ void ClientSession::media_thread() {
             window_bytes_ += *n;
             window_min_seq_ = std::min(window_min_seq_, header->seq);
             window_max_seq_ = std::max(window_max_seq_, header->seq);
+            ++fine_packets_;
+            fine_bytes_ += *n;
+            fine_min_seq_ = std::min(fine_min_seq_, header->seq);
+            fine_max_seq_ = std::max(fine_max_seq_, header->seq);
+            tick_history(gpu::now_us());
         }
         if (header->type == media::PacketType::Video) {
             if (simulated_loss_ > 0 && std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) continue;
@@ -707,8 +712,50 @@ std::optional<std::string> ClientSession::take_clipboard() {
     return out;
 }
 
+void ClientSession::tick_history(std::uint64_t now) {
+    if (fine_start_us_ == 0) {
+        fine_start_us_ = now;
+        return;
+    }
+    if (now - fine_start_us_ < 250'000) return;
+    const double secs = static_cast<double>(now - fine_start_us_) / 1e6;
+    NetSample s;
+    s.time_us = now;
+    s.mbps = static_cast<float>(static_cast<double>(fine_bytes_) * 8.0 / secs / 1e6);
+    if (fine_max_seq_ >= fine_min_seq_ && fine_packets_ > 0) {
+        const double expected = static_cast<double>(fine_max_seq_ - fine_min_seq_ + 1);
+        s.loss_pct = static_cast<float>(std::max(0.0, (expected - static_cast<double>(fine_packets_)) * 100.0 / expected));
+    }
+    s.fec_recovered = static_cast<std::uint32_t>(stats_.frames_recovered - std::min(fine_last_recovered_, stats_.frames_recovered));
+    s.frames_lost = static_cast<std::uint32_t>(stats_.frames_lost - std::min(fine_last_lost_, stats_.frames_lost));
+    s.keyframe_requests = static_cast<std::uint32_t>(stats_.keyframe_requests - std::min(fine_last_idr_, stats_.keyframe_requests));
+    s.rtt_ms = static_cast<float>(stats_.rtt_ms);
+    s.fps = static_cast<float>(static_cast<double>(fine_presented_) / secs);
+    fine_last_recovered_ = stats_.frames_recovered;
+    fine_last_lost_ = stats_.frames_lost;
+    fine_last_idr_ = stats_.keyframe_requests;
+    net_history_.push_back(s);
+    while (net_history_.size() > 48) net_history_.pop_front();  // 12 s
+    fine_start_us_ = now;
+    fine_bytes_ = 0;
+    fine_packets_ = 0;
+    fine_presented_ = 0;
+    fine_min_seq_ = ~0ull;
+    fine_max_seq_ = 0;
+}
+
+std::vector<FrameSample> ClientSession::frame_history() const {
+    std::scoped_lock lock(mutex_);
+    return {frame_history_.begin(), frame_history_.end()};
+}
+
+std::vector<NetSample> ClientSession::net_history() const {
+    std::scoped_lock lock(mutex_);
+    return {net_history_.begin(), net_history_.end()};
+}
+
 void ClientSession::report_presented(const media::EncodedFrameInfo& info, std::uint64_t arrival_us, double decode_ms,
-                                     double present_ms) {
+                                     double present_ms, std::size_t frame_bytes) {
     const std::uint64_t now = gpu::now_us();
     std::scoped_lock lock(mutex_);
     const auto host_to_local = [&](std::uint64_t host_us) {
@@ -722,6 +769,19 @@ void ClientSession::report_presented(const media::EncodedFrameInfo& info, std::u
     stats_.present_ms = ema(stats_.present_ms, present_ms);
     stats_.total_ms = ema(stats_.total_ms, std::max(0.0, (static_cast<double>(now) - captured_local) / 1000.0));
     ++window_presented_;
+    ++fine_presented_;
+    FrameSample f;
+    f.time_us = now;
+    f.encode_ms = static_cast<float>(info.encode_time_us / 1000.0);
+    f.network_ms = static_cast<float>(std::max(0.0, (static_cast<double>(arrival_us) - encoded_local) / 1000.0));
+    f.decode_ms = static_cast<float>(decode_ms);
+    f.present_ms = static_cast<float>(present_ms);
+    f.total_ms = static_cast<float>(std::max(0.0, (static_cast<double>(now) - captured_local) / 1000.0));
+    f.bytes = static_cast<std::uint32_t>(frame_bytes);
+    f.keyframe = info.keyframe;
+    frame_history_.push_back(f);
+    while (!frame_history_.empty() && now - frame_history_.front().time_us > 12'000'000) frame_history_.pop_front();
+    if (frame_history_.size() > 4000) frame_history_.pop_front();
 }
 
 Stats ClientSession::stats() const {

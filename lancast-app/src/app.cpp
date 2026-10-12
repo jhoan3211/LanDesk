@@ -420,7 +420,8 @@ void App::render() {
 
     const std::uint64_t now = gpu::now_us();
     // En "solo ver" el cursor remoto se dibuja encima, así que hay que redibujar aunque no llegue video.
-    const bool ui_active = !streaming() || show_menu_ || show_stats_ || pin_modal_open_ || now < toast_until_us_ ||
+    const bool ui_active = !streaming() || show_menu_ || show_stats_ || settings_.client.show_graphs || pin_modal_open_ ||
+                           now < toast_until_us_ ||
                            now < toolbar_until_us_ || now < toolbar_tab_until_us_ || !control_enabled();
     if (streaming() && !new_video && !ui_active && now - last_present_us_ < 100'000 && frame_presented_since_stream_) return;
     if (streaming() && !new_video && now - last_present_us_ < 8'000) return;  // Máx. ~120 Hz de interfaz sin video.
@@ -481,7 +482,8 @@ void App::render() {
     if (new_video) {
         if (!frame_presented_since_stream_ && options_.measure_latency) session_->start_latency_test();
         frame_presented_since_stream_ = true;
-        session_->report_presented(last_frame.frame.info, last_frame.arrival_us, decode_ms, (last_present_us_ - t0) / 1000.0);
+        session_->report_presented(last_frame.frame.info, last_frame.arrival_us, decode_ms, (last_present_us_ - t0) / 1000.0,
+                                   last_frame.frame.data.size());
     }
 }
 

@@ -248,6 +248,9 @@ void App::draw_stream_toolbar() {
         save_settings();
     }
     ImGui::SameLine();
+    if (ImGui::Button(settings_.client.show_graphs ? "Ocultar gráficos" : "Gráficos")) toggle_graphs();
+    ImGui::SetItemTooltip("Gráficos en tiempo real: latencia por cuadro, bitrate, pérdidas, FPS y RTT (Ctrl+Alt+Shift+G)");
+    ImGui::SameLine();
     if (ImGui::Button("Medir latencia")) {
         session_->start_latency_test();
         show_stats_ = true;
@@ -306,6 +309,7 @@ void App::draw_stream_overlay() {
     }
 
     if (show_stats_) draw_stats_overlay();
+    if (settings_.client.show_graphs) draw_graphs();
     if (!frame_presented_since_stream_) {
         ImGui::SetNextWindowPos(ImGui::GetMainViewport()->GetCenter(), 0, ImVec2(0.5f, 0.5f));
         ImGui::Begin("##waiting", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize);
@@ -328,6 +332,8 @@ void App::draw_stream_overlay() {
         if (ImGui::Button(fullscreen_ ? "Salir de pantalla completa" : "Pantalla completa")) toggle_fullscreen();
         ImGui::SameLine();
         if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) show_stats_ = !show_stats_;
+        ImGui::SameLine();
+        if (ImGui::Button(settings_.client.show_graphs ? "Ocultar gráficos" : "Gráficos")) toggle_graphs();
         ImGui::SameLine();
         if (ImGui::Checkbox("Solo ver", &settings_.client.view_only)) save_settings();
         ImGui::SameLine();
@@ -361,7 +367,7 @@ void App::draw_stream_overlay() {
         ImGui::Separator();
         draw_transfers(session_->files(), "##ovt");
         ImGui::TextColored(kMuted,
-                           "Atajos: Ctrl+Alt+Shift + M menú · S estadísticas · F pantalla completa · 1-9 monitor · 0 todos · "
+                           "Atajos: Ctrl+Alt+Shift + M menú · S estadísticas · G gráficos · F pantalla completa · 1-9 monitor · 0 todos · "
                            "R mouse relativo · V solo ver · Q desconectar · Ctrl+Alt+Fin = Ctrl+Alt+Supr");
     }
     ImGui::End();
@@ -492,6 +498,243 @@ void App::draw_second_window_controls() {
         ImGui::EndCombo();
     }
     ImGui::SetItemTooltip("Muestra otro monitor del host en una segunda ventana (o en tu segundo monitor)");
+}
+
+// ------------------------------------------------------------------------------------------------ gráficos
+
+namespace {
+
+constexpr float kGraphSeconds = 10.0f;
+
+struct Chart {
+    ImDrawList* dl = nullptr;
+    ImVec2 p0;
+    ImVec2 p1;
+    std::uint64_t now = 0;
+
+    [[nodiscard]] float x_of(std::uint64_t t) const {
+        const float age = static_cast<float>(now - std::min(t, now)) / 1e6f;
+        return p1.x - (age / kGraphSeconds) * (p1.x - p0.x);
+    }
+    [[nodiscard]] float y_of(float v, float max) const { return p1.y - std::clamp(v / max, 0.0f, 1.0f) * (p1.y - p0.y); }
+};
+
+// Escala "redonda" para el eje Y (5, 10, 20, 25, 50, 100...).
+float nice_max(float v, float floor_value) {
+    v = std::max(v, floor_value);
+    for (const float step : {5.f, 10.f, 15.f, 20.f, 25.f, 30.f, 40.f, 50.f, 75.f, 100.f, 150.f, 200.f, 300.f, 500.f, 1000.f}) {
+        if (v <= step) return step;
+    }
+    return std::ceil(v / 500.f) * 500.f;
+}
+
+Chart begin_chart(float height, float y_max, const char* unit, float scale) {
+    Chart c;
+    c.dl = ImGui::GetWindowDrawList();
+    const float w = ImGui::GetContentRegionAvail().x;
+    const ImVec2 pos = ImGui::GetCursorScreenPos();
+    const float left = 34.0f * scale;  // Etiquetas del eje Y.
+    c.p0 = ImVec2(pos.x + left, pos.y);
+    c.p1 = ImVec2(pos.x + w, pos.y + height);
+    c.dl->AddRectFilled(c.p0, c.p1, IM_COL32(18, 20, 26, 230), 4.0f);
+    // Líneas de referencia en 0, 50 % y 100 % de la escala.
+    for (const float f : {0.0f, 0.5f, 1.0f}) {
+        const float y = c.p1.y - f * (c.p1.y - c.p0.y);
+        c.dl->AddLine(ImVec2(c.p0.x, y), ImVec2(c.p1.x, y), IM_COL32(255, 255, 255, f == 0.0f ? 60 : 25));
+        char label[32];
+        std::snprintf(label, sizeof(label), "%g%s", y_max * f, f == 1.0f ? unit : "");
+        c.dl->AddText(ImVec2(pos.x, y - ImGui::GetFontSize() * 0.5f), IM_COL32(150, 155, 165, 255), label);
+    }
+    ImGui::Dummy(ImVec2(w, height));
+    return c;
+}
+
+void legend(ImU32 color, const char* text) {
+    const ImVec2 p = ImGui::GetCursorScreenPos();
+    const float s = ImGui::GetFontSize() * 0.6f;
+    ImGui::GetWindowDrawList()->AddRectFilled(ImVec2(p.x, p.y + s * 0.4f), ImVec2(p.x + s, p.y + s * 1.4f), color, 2.0f);
+    ImGui::Dummy(ImVec2(s + 4, s));
+    ImGui::SameLine(0, 0);
+    ImGui::TextUnformatted(text);
+}
+
+float percentile(std::vector<float> v, float p) {
+    if (v.empty()) return 0;
+    std::ranges::sort(v);
+    return v[std::min(v.size() - 1, static_cast<std::size_t>(p * static_cast<float>(v.size() - 1)))];
+}
+
+}  // namespace
+
+void App::toggle_graphs() {
+    settings_.client.show_graphs = !settings_.client.show_graphs;
+    save_settings();
+}
+
+void App::draw_graphs() {
+    const auto frames = session_->frame_history();
+    const auto net = session_->net_history();
+    const std::uint64_t now = gpu::now_us();
+    const float k = scale_;
+
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float width = std::min(470.0f * k, vp->Size.x * 0.45f);
+    ImGui::SetNextWindowPos(ImVec2(vp->Pos.x + vp->Size.x - width - 12 * k, vp->Pos.y + 12 * k), ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(width, 0), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.80f);
+    ImGui::Begin("##graphs", nullptr,
+                 ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoInputs | ImGuiWindowFlags_NoFocusOnAppearing |
+                     ImGuiWindowFlags_NoNav | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_AlwaysAutoResize);
+
+    const ImU32 c_encode = IM_COL32(74, 144, 226, 255);
+    const ImU32 c_network = IM_COL32(76, 199, 119, 255);
+    const ImU32 c_client = IM_COL32(240, 196, 70, 255);
+    const ImU32 c_wait = IM_COL32(140, 145, 155, 200);
+    const ImU32 c_lost = IM_COL32(235, 70, 70, 255);
+    const ImU32 c_fec = IM_COL32(245, 150, 50, 255);
+    const ImU32 c_idr = IM_COL32(180, 110, 240, 255);
+
+    // --- Latencia por cuadro (apilada) ---
+    std::vector<float> totals;
+    totals.reserve(frames.size());
+    for (const auto& f : frames) {
+        if (now - f.time_us < static_cast<std::uint64_t>(kGraphSeconds * 1e6f)) totals.push_back(f.total_ms);
+    }
+    const float last_total = frames.empty() ? 0.0f : frames.back().total_ms;
+    ImGui::TextColored(kAccent, "Latencia por cuadro");
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "ahora %.1f ms · p95 %.1f · máx %.1f", last_total, percentile(totals, 0.95f),
+                       totals.empty() ? 0.0f : *std::ranges::max_element(totals));
+    {
+        const float y_max = nice_max(percentile(totals, 0.98f) * 1.15f, 10.0f);
+        Chart c = begin_chart(110 * k, y_max, " ms", k);
+        c.now = now;
+        // Por columna de píxeles se dibuja el cuadro con mayor latencia (así se ven los picos).
+        const int columns = std::max(1, static_cast<int>(c.p1.x - c.p0.x));
+        std::vector<const lancast::client::FrameSample*> worst(static_cast<std::size_t>(columns), nullptr);
+        for (const auto& f : frames) {
+            const int col = static_cast<int>(c.x_of(f.time_us) - c.p0.x);
+            if (col < 0 || col >= columns) continue;
+            auto& w = worst[static_cast<std::size_t>(col)];
+            if (w == nullptr || f.total_ms > w->total_ms) w = &f;
+        }
+        for (int col = 0; col < columns; ++col) {
+            const auto* f = worst[static_cast<std::size_t>(col)];
+            if (f == nullptr) continue;
+            const float x = c.p0.x + static_cast<float>(col);
+            float base = 0;
+            auto seg = [&](float v, ImU32 color) {
+                if (v <= 0) return;
+                c.dl->AddLine(ImVec2(x, c.y_of(base, y_max)), ImVec2(x, c.y_of(base + v, y_max)), color, 1.0f);
+                base += v;
+            };
+            seg(f->encode_ms, c_encode);
+            seg(f->network_ms, c_network);
+            seg(f->decode_ms + f->present_ms, c_client);
+            seg(std::max(0.0f, f->total_ms - base), c_wait);  // Resto: espera hasta la presentación (V-Sync, cola).
+            if (f->keyframe) c.dl->AddCircleFilled(ImVec2(x, c.p1.y - 3 * k), 2.0f * k, c_idr);
+        }
+        // Eventos de pérdida (líneas verticales).
+        for (const auto& n : net) {
+            const float x = c.x_of(n.time_us);
+            if (x < c.p0.x) continue;
+            if (n.frames_lost > 0) {
+                c.dl->AddLine(ImVec2(x, c.p0.y), ImVec2(x, c.p1.y), c_lost, 1.5f);
+            } else if (n.fec_recovered > 0) {
+                c.dl->AddLine(ImVec2(x, c.p0.y), ImVec2(x, c.p1.y), c_fec, 1.0f);
+            }
+            if (n.keyframe_requests > 0) c.dl->AddTriangleFilled(ImVec2(x - 4 * k, c.p0.y), ImVec2(x + 4 * k, c.p0.y),
+                                                                  ImVec2(x, c.p0.y + 6 * k), c_idr);
+        }
+    }
+    legend(c_encode, "Host (captura+codif.)");
+    ImGui::SameLine();
+    legend(c_network, "Red");
+    ImGui::SameLine();
+    legend(c_client, "Decod.+dibujo");
+    ImGui::SameLine();
+    legend(c_wait, "Espera");
+    legend(c_lost, "Cuadro perdido");
+    ImGui::SameLine();
+    legend(c_fec, "Reparado por FEC");
+    ImGui::SameLine();
+    legend(c_idr, "Keyframe / pedido");
+
+    // --- Bitrate y pérdida de paquetes ---
+    ImGui::Spacing();
+    float max_mbps = 0;
+    float max_loss = 0;
+    for (const auto& n : net) {
+        max_mbps = std::max(max_mbps, n.mbps);
+        max_loss = std::max(max_loss, n.loss_pct);
+    }
+    const float last_mbps = net.empty() ? 0.0f : net.back().mbps;
+    const float last_loss = net.empty() ? 0.0f : net.back().loss_pct;
+    ImGui::TextColored(kAccent, "Bitrate");
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "ahora %.1f Mbps · máx %.1f · pérdida %.2f %%", last_mbps, max_mbps, last_loss);
+    {
+        const float y_max = nice_max(max_mbps * 1.1f, 5.0f);
+        const float loss_max = std::max(5.0f, max_loss);
+        Chart c = begin_chart(70 * k, y_max, "", k);
+        c.now = now;
+        const float bar = std::max(2.0f, (c.p1.x - c.p0.x) / (kGraphSeconds * 4.0f) - 1.0f);
+        ImVec2 prev{-1, -1};
+        for (const auto& n : net) {
+            const float x = c.x_of(n.time_us);
+            if (x < c.p0.x) continue;
+            if (n.loss_pct > 0.001f) {
+                const float h = std::clamp(n.loss_pct / loss_max, 0.02f, 1.0f) * (c.p1.y - c.p0.y);
+                c.dl->AddRectFilled(ImVec2(x - bar, c.p1.y - h), ImVec2(x, c.p1.y), IM_COL32(235, 70, 70, 170));
+            }
+            const ImVec2 p(x, c.y_of(n.mbps, y_max));
+            if (prev.x >= 0) c.dl->AddLine(prev, p, c_encode, 2.0f);
+            prev = p;
+        }
+        c.dl->AddText(ImVec2(c.p1.x - 70 * k, c.p0.y + 2), IM_COL32(150, 155, 165, 255), "Mbps");
+    }
+
+    // --- FPS y RTT ---
+    ImGui::Spacing();
+    float max_fps = 0;
+    float max_rtt = 0;
+    for (const auto& n : net) {
+        max_fps = std::max(max_fps, n.fps);
+        max_rtt = std::max(max_rtt, n.rtt_ms);
+    }
+    const float last_fps = net.empty() ? 0.0f : net.back().fps;
+    const float last_rtt = net.empty() ? 0.0f : net.back().rtt_ms;
+    ImGui::TextColored(kAccent, "FPS y RTT");
+    ImGui::SameLine();
+    ImGui::TextColored(kMuted, "%.0f fps · RTT %.1f ms (máx %.1f)", last_fps, last_rtt, max_rtt);
+    {
+        const float fps_max = nice_max(max_fps * 1.1f, 30.0f);
+        const float rtt_max = nice_max(max_rtt * 1.2f, 5.0f);
+        Chart c = begin_chart(60 * k, fps_max, " fps", k);
+        c.now = now;
+        ImVec2 pf{-1, -1};
+        ImVec2 pr{-1, -1};
+        for (const auto& n : net) {
+            const float x = c.x_of(n.time_us);
+            if (x < c.p0.x) continue;
+            const ImVec2 f(x, c.y_of(n.fps, fps_max));
+            const ImVec2 r(x, c.y_of(n.rtt_ms, rtt_max));
+            if (pf.x >= 0) {
+                c.dl->AddLine(pf, f, c_network, 2.0f);
+                c.dl->AddLine(pr, r, IM_COL32(90, 200, 230, 255), 1.5f);
+            }
+            pf = f;
+            pr = r;
+        }
+        char rtt_label[32];
+        std::snprintf(rtt_label, sizeof(rtt_label), "RTT 0-%g ms", rtt_max);
+        c.dl->AddText(ImVec2(c.p1.x - 110 * k, c.p0.y + 2), IM_COL32(90, 200, 230, 255), rtt_label);
+    }
+    legend(c_network, "FPS");
+    ImGui::SameLine();
+    legend(IM_COL32(90, 200, 230, 255), "RTT (escala propia)");
+    ImGui::TextColored(kMuted, "Últimos %.0f s · Ctrl+Alt+Shift+G oculta", kGraphSeconds);
+    ImGui::End();
 }
 
 }  // namespace lancast::app

@@ -50,6 +50,28 @@ struct Stats {
     double real_latency_max_ms = 0;
 };
 
+// Historial para los gráficos en tiempo real.
+struct FrameSample {  // Un cuadro presentado.
+    std::uint64_t time_us = 0;
+    float encode_ms = 0;   // Captura -> bitstream (host).
+    float network_ms = 0;  // Bitstream -> cuadro completo aquí.
+    float decode_ms = 0;
+    float present_ms = 0;
+    float total_ms = 0;    // Captura -> presentado.
+    std::uint32_t bytes = 0;
+    bool keyframe = false;
+};
+struct NetSample {  // Una ventana de 250 ms.
+    std::uint64_t time_us = 0;
+    float mbps = 0;
+    float loss_pct = 0;           // Paquetes perdidos en la red.
+    std::uint32_t fec_recovered = 0;  // Cuadros reparados con la paridad.
+    std::uint32_t frames_lost = 0;
+    std::uint32_t keyframe_requests = 0;
+    float rtt_ms = 0;
+    float fps = 0;
+};
+
 // Lo que el cliente debe buscar en la imagen durante la medición de latencia.
 struct LatencyTarget {
     float x = 0;
@@ -114,8 +136,11 @@ public:
 
     // La interfaz informa los tiempos de decodificación/presentación de cada frame.
     void report_presented(const media::EncodedFrameInfo& info, std::uint64_t arrival_us, double decode_ms,
-                          double present_ms);
+                          double present_ms, std::size_t frame_bytes = 0);
     [[nodiscard]] Stats stats() const;
+    // Últimos ~10 s para los gráficos (cuadros presentados y ventanas de red de 250 ms).
+    [[nodiscard]] std::vector<FrameSample> frame_history() const;
+    [[nodiscard]] std::vector<NetSample> net_history() const;
 
     // Medición de latencia real: el host alterna un marcador blanco/negro y el cliente detecta el cambio.
     void start_latency_test(int samples = 10);
@@ -196,6 +221,20 @@ private:
     std::uint64_t window_packets_ = 0;
     std::uint64_t window_min_seq_ = ~0ull;
     std::uint64_t window_max_seq_ = 0;
+
+    // Historial fino (gráficos): ventanas de 250 ms.
+    std::deque<FrameSample> frame_history_;
+    std::deque<NetSample> net_history_;
+    std::uint64_t fine_start_us_ = 0;
+    std::uint64_t fine_bytes_ = 0;
+    std::uint64_t fine_packets_ = 0;
+    std::uint64_t fine_presented_ = 0;
+    std::uint64_t fine_min_seq_ = ~0ull;
+    std::uint64_t fine_max_seq_ = 0;
+    std::uint64_t fine_last_recovered_ = 0;
+    std::uint64_t fine_last_lost_ = 0;
+    std::uint64_t fine_last_idr_ = 0;
+    void tick_history(std::uint64_t now);  // Con mutex_ tomado.
 
     void send_next_probe();
     void finish_latency_test();
