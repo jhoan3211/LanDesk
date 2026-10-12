@@ -49,6 +49,7 @@ struct EncodeContext {
     std::deque<InFlight> in_flight;
     std::uint16_t epoch = 0;
     std::atomic<int> fec{15};
+    std::atomic<std::uint32_t> pace_mbps{0};
     std::uint32_t next_frame_id = 0;
     bool slices = false;
 };
@@ -369,6 +370,7 @@ void Streamer::run() {
         next->ctx = std::make_shared<EncodeContext>();
         next->ctx->epoch = epoch;
         next->ctx->fec = static_cast<int>(cfg.fec_percent);
+        next->ctx->pace_mbps = cfg.pacing_mbps;
         next->ctx->slices = next->encoder->slices_active();
         // Salida en paralelo: cada frame codificado va directo al hilo de envío.
         next->encoder->set_output_callback([this, ctx = next->ctx](mf::EncodedPacket&& pkt) {
@@ -395,7 +397,7 @@ void Streamer::run() {
             const std::size_t bytes = pkt.data.size();
             {
                 std::scoped_lock lock(send_mutex_);
-                send_queue_.push_back(SendJob{std::move(pkt.data), info, ctx->fec.load()});
+                send_queue_.push_back(SendJob{std::move(pkt.data), info, ctx->fec.load(), ctx->pace_mbps.load()});
             }
             send_cv_.notify_one();
             if (pkt.last_slice) SetEvent(ctx->output_event);
@@ -524,6 +526,7 @@ void Streamer::run() {
                                                : cfg->bitrate_kbps;
                 p->encoder->set_bitrate(kbps);
                 p->ctx->fec = static_cast<int>(cfg->fec_percent);
+                p->ctx->pace_mbps = cfg->pacing_mbps;
                 p->config = *cfg;
                 p->info.bitrate_kbps = kbps;
                 p->info.audio_rate = cfg->audio ? audio_rate : 0;
@@ -720,6 +723,7 @@ void Streamer::sender_loop() {
     SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_HIGHEST);
     sys::RealtimeThread mmcss(L"Games");
     auto cipher = sender_.make_cipher();
+    net::MediaSender::Pacer pacer;  // Continuo entre cuadros y slices.
     while (running_) {
         SendJob job;
         {
@@ -730,7 +734,8 @@ void Streamer::sender_loop() {
             send_queue_.pop_front();
         }
         // Todos los fragmentos de video miden lo mismo: se envían por lotes (UDP Send Offload).
-        net::MediaSender::Batch batch(sender_);
+        pacer.set_rate(job.pace_mbps);
+        net::MediaSender::Batch batch(sender_, &pacer);
         media::packetize_frame(job.data, job.info, job.fec_percent, [&](std::span<const std::uint8_t> payload) {
             batch.add(*cipher, media::PacketType::Video, payload);
         });

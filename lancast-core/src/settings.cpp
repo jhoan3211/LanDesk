@@ -50,6 +50,7 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("intra_refresh", s.intra_refresh);
     t.set("slices", s.slices);
     t.set("adaptive", s.adaptive);
+    t.set("pacing_mbps", static_cast<std::int64_t>(s.pacing_mbps));
 }
 
 StreamSettings stream_from_table(const toml::Table& t) {
@@ -79,6 +80,7 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.intra_refresh = t.get_bool("intra_refresh").value_or(s.intra_refresh);
     s.slices = t.get_bool("slices").value_or(s.slices);
     s.adaptive = t.get_bool("adaptive").value_or(s.adaptive);
+    s.pacing_mbps = clamp_u32(t.get_int("pacing_mbps").value_or(0), 0, 10000);
     return s;
 }
 

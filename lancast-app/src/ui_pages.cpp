@@ -350,6 +350,24 @@ void App::draw_stream_settings(bool live) {
         if (ImGui::Checkbox("Por slices (sub-frame)##sl", &s.slices)) changed = true;
         help("El cuadro se envía en partes a medida que el codificador las termina: la red trabaja en paralelo "
              "con la codificación. Solo si la GPU del host lo soporta.");
+        row("Ritmo de envío");
+        {
+            const std::uint32_t options[] = {0, 300, 500, 800};
+            const std::string label = s.pacing_mbps == 0 ? std::string{"Sin límite (cable)"} : std::format("{} Mbps", s.pacing_mbps);
+            if (ImGui::BeginCombo("##pacing", label.c_str())) {
+                for (const std::uint32_t o : options) {
+                    const std::string item = o == 0 ? std::string{"Sin límite (cable)"} : std::format("{} Mbps (Wi-Fi)", o);
+                    if (ImGui::Selectable(item.c_str(), s.pacing_mbps == o)) {
+                        s.pacing_mbps = o;
+                        changed = true;
+                    }
+                }
+                ImGui::EndCombo();
+            }
+        }
+        help("El host reparte los paquetes de cada cuadro a este ritmo en vez de enviarlos todos de golpe. Por cable no hace "
+             "falta. Por Wi-Fi o pasando por un router de 1 Gb evita que las ráfagas se pierdan (sobre todo con bitrate alto); "
+             "suma poco: un cuadro de 100 KB a 500 Mbps tarda 1,6 ms en salir.");
         row("Ajuste automático");
         if (ImGui::Checkbox("##adaptive", &s.adaptive)) changed = true;
         help("Si el codificador del host no da abasto (se salta más del 10 % de los cuadros o se le acumulan), baja la "

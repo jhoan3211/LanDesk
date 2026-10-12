@@ -160,6 +160,7 @@ void StreamConfig::write(ByteWriter& w) const {
     w.boolean(intra_refresh).boolean(slices);
     w.u8(stream_index).boolean(enabled);
     w.boolean(adaptive);
+    w.u32(pacing_mbps);
 }
 
 std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
@@ -189,6 +190,7 @@ std::optional<StreamConfig> StreamConfig::read(ByteReader& r) {
             c.enabled = r.boolean();
         }
         if (r.remaining() >= 1) c.adaptive = r.boolean();
+        if (r.remaining() >= 4) c.pacing_mbps = r.u32();
     } else {
         c.intra_refresh = false;
         c.slices = false;

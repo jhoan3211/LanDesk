@@ -208,6 +208,49 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
     EXPECT_EQ(client.stream()->bitrate_kbps, 15000u);
     EXPECT_EQ(client.stream()->epoch, epoch_before) << "Un cambio de audio/bitrate no debe recrear el codificador";
 
+    // 3a) Ritmo de envío: con un límite bajo cada cuadro tarda más en salir (sube "red") y sigue llegando completo.
+    {
+        auto measure_network = [&](std::uint32_t pace) {
+            proto::StreamConfig paced = cfg3;
+            paced.pacing_mbps = pace;
+            paced.auto_bitrate = false;
+            paced.bitrate_kbps = 20000;
+            client.request_stream(paced);
+            Sleep(600);
+            // Con el escritorio quieto los cuadros son diminutos: se piden cuadros clave (grandes) para medir.
+            int got = 0;
+            const std::uint64_t start = gpu::now_us();
+            std::uint64_t next_key = start;
+            while (gpu::now_us() < start + 1'500'000) {
+                if (gpu::now_us() >= next_key) {
+                    client.request_keyframe();
+                    next_key += 200'000;
+                }
+                WaitForSingleObject(client.frame_event(), 20);
+                for (auto& f : client.take_frames()) {
+                    client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+                    ++got;
+                }
+            }
+            double sum = 0;
+            int n = 0;
+            for (const auto& fs : client.frame_history()) {
+                if (fs.time_us >= start && fs.bytes > 22'000) {  // Más de una tanda: el ritmo se nota.
+                    sum += fs.network_ms;
+                    ++n;
+                }
+            }
+            return std::pair{got, n > 0 ? sum / n : 0.0};
+        };
+        const auto [free_frames, free_net] = measure_network(0);
+        const auto [paced_frames, paced_net] = measure_network(40);
+        std::printf("  Ritmo de envío: sin límite %.2f ms de red en cuadros grandes (%d cuadros) · a 40 Mbps %.2f ms (%d cuadros)\n", free_net,
+                    free_frames, paced_net, paced_frames);
+        EXPECT_GT(paced_frames, 5) << "Con ritmo el video debe seguir llegando";
+        EXPECT_GT(paced_net, free_net + 1.0) << "Con 40 Mbps cada cuadro grande debe tardar más en salir";
+        measure_network(0);
+    }
+
     // 3b2) 4:4:4 + HDR: el host empaca el color completo (cuadro W×2H); HDR solo si su monitor está en modo HDR.
     {
         proto::StreamConfig c444 = cfg3;

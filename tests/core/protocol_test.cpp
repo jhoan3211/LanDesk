@@ -157,7 +157,7 @@ TEST(Protocol, StreamConfigFromOlderClientHasNewFeaturesOff) {
     ByteWriter w;
     c.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 4);  // Sin los campos de la 1.3 (intra_refresh, slices, stream_index, enabled).
+    old_bytes.resize(old_bytes.size() - 4 - 1 - 4);  // Sin los de la 1.3 (intra_refresh, slices, stream_index, enabled), 1.4 y 1.7.
     ByteReader r(old_bytes);
     const auto out = StreamConfig::read(r);
     ASSERT_TRUE(out.has_value());
@@ -255,10 +255,25 @@ TEST(Protocol, ColorFeaturesAreOptional) {
         ByteWriter w;
         cfg.write(w);
         std::vector<std::uint8_t> old = w.take();
-        old.pop_back();
+        old.resize(old.size() - 1 - 4);  // Sin "adaptive" (1.4) ni "pacing_mbps" (1.7).
         ByteReader r(old);
         const auto out = StreamConfig::read(r);
         ASSERT_TRUE(out.has_value());
         EXPECT_TRUE(out->adaptive);
+    }
+
+    // StreamConfig 1.7: "pacing_mbps" opcional (ausente = sin límite).
+    cfg.pacing_mbps = 500;
+    EXPECT_EQ(roundtrip(cfg).pacing_mbps, 500u);
+    {
+        ByteWriter w;
+        cfg.write(w);
+        std::vector<std::uint8_t> old = w.take();
+        old.resize(old.size() - 4);
+        ByteReader r(old);
+        const auto out = StreamConfig::read(r);
+        ASSERT_TRUE(out.has_value());
+        EXPECT_EQ(out->pacing_mbps, 0u);
+        EXPECT_FALSE(out->adaptive);
     }
 }

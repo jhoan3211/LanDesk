@@ -60,6 +60,7 @@ private:
         std::vector<std::uint8_t> data;
         media::EncodedFrameInfo info;
         int fec_percent = 0;
+        std::uint32_t pace_mbps = 0;
     };
 
     net::MediaSender& sender_;

@@ -48,6 +48,7 @@ struct StreamSettings {
     bool intra_refresh = false;
     bool slices = true;         // Envío por slices: la red empieza antes de que termine de codificarse el cuadro.
     bool adaptive = true;       // El host baja resolución/FPS solo si su codificador no da abasto.
+    std::uint32_t pacing_mbps = 0;  // Ritmo máximo de envío de cada cuadro (0 = sin límite; útil por Wi-Fi).
 
     friend bool operator==(const StreamSettings&, const StreamSettings&) = default;
 };
