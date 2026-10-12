@@ -330,6 +330,13 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
                 keyboardShown = false
                 keysBar.visibility = View.GONE
             }
+            // Con el teclado abierto la vista sube a la zona libre; al cerrarlo, sin zoom, vuelve al centro.
+            if (imeHeight == 0 && wasOpen && !zoomed()) {
+                panX = 0f
+                panY = 0f
+            }
+            clampPan()
+            layoutVideo()
             placeBubble()
             insets
         }
@@ -602,14 +609,26 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun zoomed() = scale > 1.01f
 
+    // Alto de la pantalla que no tapa el teclado (ni su barra de teclas).
+    private fun visibleHeight(): Float {
+        val keys = if (keyboardShown && keysBar.visibility == View.VISIBLE) keysBar.height else 0
+        return (root.height - imeHeight - keys).toFloat().coerceAtLeast(root.height / 4f)
+    }
+
+    // La vista puede moverse a cualquier lugar donde se vea entera; si es más grande que la pantalla (zoom), sus
+    // bordes no pueden despegarse de los de la pantalla. En vertical esto permite subirla sobre el teclado.
     private fun clampPan() {
         val b = baseRect()
         val w = b.width() * scale
         val h = b.height() * scale
-        val maxX = maxOf(0f, (w - root.width) / 2)
-        val maxY = maxOf(0f, (h - root.height) / 2)
-        panX = panX.coerceIn(-maxX, maxX)
-        panY = panY.coerceIn(-maxY, maxY)
+        fun clampAxis(pan: Float, center: Float, size: Float, visible: Float): Float {
+            val left = center - size / 2 + pan
+            val lo = if (size <= visible) 0f else visible - size
+            val hi = if (size <= visible) visible - size else 0f
+            return pan + (left.coerceIn(lo, hi) - left)
+        }
+        panX = clampAxis(panX, b.centerX(), w, root.width.toFloat())
+        panY = clampAxis(panY, b.centerY(), h, visibleHeight())
     }
 
     override fun zoomBy(factor: Float, focusX: Float, focusY: Float) {
@@ -681,7 +700,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             var dx = 0f
             var dy = 0f
             if (px < m) dx = m - px else if (px > root.width - m) dx = root.width - m - px
-            if (py < m) dy = m - py else if (py > root.height - m) dy = root.height - m - py
+            if (py < m) dy = m - py else if (py > visibleHeight() - m) dy = visibleHeight() - m - py
             if (dx != 0f || dy != 0f) {
                 panBy(dx, dy)
                 return
