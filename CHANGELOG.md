@@ -11,6 +11,7 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 - **Teclado flotante**: una bolita a la derecha abre y cierra el teclado; se arrastra para subirla o bajarla y se activa o desactiva en la barra de opciones (*Teclado flotante*).
 - **Gira con el teléfono**: horizontal o vertical según la rotación automática; la vista y el zoom se reacomodan sin cortar la sesión.
 - **Con el teclado abierto la vista sube** a la zona que queda libre (al cerrarlo vuelve a su lugar), y arrastrar con tres dedos también la mueve hacia arriba y abajo aunque no haya zoom.
+- **Arreglo: los botones de volumen del teléfono no funcionaban** durante la sesión (la vista del teclado se quedaba con ellos). Ahora controlan el volumen del audio del PC.
 - **Bitrate para Wi-Fi**: 40 Mbps por defecto (antes el automático, que a 1440p y 120 fps superaba 150 Mbps y las ráfagas se perdían entre el router de 1 Gb y el Wi-Fi). Se cambia en *Ajustes* o en *Calidad* durante la sesión (20, 40, 60, 100 Mbps o automático).
 
 ## 1.5.0

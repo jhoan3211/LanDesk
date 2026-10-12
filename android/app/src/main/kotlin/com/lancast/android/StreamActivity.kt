@@ -85,6 +85,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         }
         port = intent.getIntExtra(EXTRA_PORT, 47984)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC  // Los botones de volumen controlan el audio del PC.
         if (Build.VERSION.SDK_INT >= 28) {
             // Usar también la zona de la cámara frontal (notch): más superficie para el escritorio.
             window.attributes = window.attributes.apply {
