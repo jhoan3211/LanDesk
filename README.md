@@ -34,6 +34,7 @@ En el PC hace falta LanCast **1.5** o superior para escribir texto desde el tecl
 | Tocar con dos dedos | Clic derecho |
 | Deslizar dos dedos | Rueda (vertical y horizontal) |
 | Pellizcar | Zoom de la vista (la vista sigue al cursor) |
+| Arrastrar con tres dedos | Mover la vista con zoom (también en modo directo) |
 | Mantener presionado, o doble toque y arrastrar | Arrastrar (botón izquierdo presionado) |
 | Tocar con tres dedos | Abrir / cerrar el teclado |
 

@@ -14,7 +14,8 @@ import kotlin.math.hypot
 // Touchpad (predeterminado): el dedo mueve el cursor como un touchpad de laptop.
 //   toque = clic · toque con 2 dedos = clic derecho · arrastrar con 2 dedos = rueda · pellizcar = zoom
 //   mantener presionado (o doble toque y arrastrar) = arrastrar con el botón izquierdo · toque con 3 dedos = teclado
-// Directo: el toque cae donde está el dedo (clic, arrastrar, 2 dedos = rueda o mover la vista con zoom).
+// Directo: el toque cae donde está el dedo (clic, arrastrar, 2 dedos = rueda).
+// En los dos modos: arrastrar con 3 dedos mueve la vista ampliada (zoom).
 class TouchController(private val host: Host, private val density: Float) {
     interface Host {
         fun videoRect(): RectF      // Dónde se ve el stream en la pantalla (con el zoom aplicado).
@@ -61,6 +62,9 @@ class TouchController(private val host: Host, private val density: Float) {
     private var twoLastY = 0f
     private var scrollAccumY = 0f
     private var scrollAccumX = 0f
+    private var threeLastX = 0f
+    private var threeLastY = 0f
+    private var threeMoved = false
 
     private val longPress = Runnable {
         if (touching && !moved && maxPointers == 1 && !dragging) {
@@ -96,6 +100,12 @@ class TouchController(private val host: Host, private val density: Float) {
             MotionEvent.ACTION_POINTER_DOWN -> {
                 maxPointers = maxOf(maxPointers, e.pointerCount)
                 handler.removeCallbacks(longPress)
+                if (e.pointerCount == 3) {
+                    // Tres dedos: mover la vista con zoom (o, si no se mueven, abrir el teclado al soltar).
+                    threeLastX = centroid3X(e)
+                    threeLastY = centroid3Y(e)
+                    threeMoved = false
+                }
                 if (e.pointerCount == 2) {
                     if (dragging) endDrag()
                     two = Two.NONE
@@ -110,7 +120,9 @@ class TouchController(private val host: Host, private val density: Float) {
                 }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (e.pointerCount >= 2 && maxPointers == 2) {
+                if (e.pointerCount >= 3) {
+                    threeFingerMove(e)
+                } else if (e.pointerCount >= 2 && maxPointers == 2) {
                     twoFingerMove(e)
                 } else if (e.pointerCount == 1 && maxPointers == 1) {
                     oneFingerMove(e)
@@ -135,7 +147,7 @@ class TouchController(private val host: Host, private val density: Float) {
                         lastTapY = e.y
                     }
                     maxPointers == 2 && two == Two.NONE && duration < 350 -> click(MouseButtonId.RIGHT)
-                    maxPointers == 3 && duration < 450 -> host.toggleKeyboard()
+                    maxPointers == 3 && !threeMoved && duration < 450 -> host.toggleKeyboard()
                 }
                 touching = false
                 pendingDrag = false
@@ -215,6 +227,22 @@ class TouchController(private val host: Host, private val density: Float) {
         twoLastX = x
         twoLastY = y
     }
+
+    private fun threeFingerMove(e: MotionEvent) {
+        val x = centroid3X(e)
+        val y = centroid3Y(e)
+        val dx = x - threeLastX
+        val dy = y - threeLastY
+        if (!threeMoved && hypot(dx, dy) > slop) threeMoved = true
+        if (threeMoved) {
+            host.panBy(dx, dy)
+            threeLastX = x
+            threeLastY = y
+        }
+    }
+
+    private fun centroid3X(e: MotionEvent) = (e.getX(0) + e.getX(1) + e.getX(2)) / 3
+    private fun centroid3Y(e: MotionEvent) = (e.getY(0) + e.getY(1) + e.getY(2)) / 3
 
     private fun moveAbsoluteTo(x: Float, y: Float) {
         val r = host.videoRect()

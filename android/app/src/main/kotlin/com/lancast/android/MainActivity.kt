@@ -114,7 +114,7 @@ class MainActivity : Activity() {
         col.addView(text(
             "Necesitas LanCast 1.5 o superior en el PC y estar en la misma red. La primera vez el PC muestra un PIN de 6 dígitos.\n\n" +
                 "Gestos: un dedo mueve el cursor · toque = clic · dos dedos = clic derecho / rueda · pellizcar = zoom · " +
-                "mantener = arrastrar · tres dedos = teclado.",
+                "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.",
             12f, Ui.MUTED).apply { margins(top = dp(20)) })
 
         return ScrollView(this).apply {
