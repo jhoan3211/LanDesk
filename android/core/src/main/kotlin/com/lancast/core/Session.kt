@@ -81,9 +81,11 @@ class Session(
     private var pinLatch = CountDownLatch(1)
     private var socket: Socket? = null
     private var output: OutputStream? = null
-    private var sendCipher: AesGcm? = null
-    private var sendCounter = 0L
-    private val sendLock = Any()
+    // Envío: todo pasa por una cola y un hilo propio. Así nunca se usa la red desde el hilo de la interfaz
+    // (Android lo prohíbe) y el contador del nonce solo avanza cuando la trama salió de verdad: si avanzara con
+    // un envío fallido, el host rechazaría el siguiente mensaje y cortaría la sesión.
+    private val outbox = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+    @Volatile private var senderThread: Thread? = null
     private var mediaSocket: DatagramSocket? = null
     private var controlThread: Thread? = null
     private var mediaThread: Thread? = null
@@ -110,18 +112,35 @@ class Session(
         pinLatch.countDown()
     }
 
+    // No bloquea: se puede llamar desde cualquier hilo (también el de la interfaz).
     fun send(message: ByteArray): Boolean {
-        val cipher = sendCipher ?: return false
-        val out = output ?: return false
-        return try {
-            synchronized(sendLock) {
-                val sealed = cipher.encrypt(counterNonce(sendCounter++), null, message)
-                writeFrame(out, sealed)
+        if (stopping.get() || senderThread == null) return false
+        return outbox.offer(message)
+    }
+
+    private fun senderLoop(cipher: AesGcm, out: OutputStream) {
+        var counter = 0L
+        try {
+            while (true) {
+                val msg = outbox.take()
+                if (msg === CLOSE_MARKER) break
+                writeFrame(out, cipher.encrypt(counterNonce(counter), null, msg))
+                counter++  // Solo si se escribió.
             }
-            true
+        } catch (_: InterruptedException) {
         } catch (_: Exception) {
-            false
+            // La escritura falló: el canal ya no sirve. Al cerrar el socket, el hilo de control avisa y se reconecta.
+        } finally {
+            closeSockets()
         }
+    }
+
+    private fun closeSockets() {
+        try {
+            socket?.close()
+        } catch (_: Exception) {
+        }
+        mediaSocket?.close()
     }
 
     fun requestStream(config: StreamConfig) = send(config.encode())
@@ -137,16 +156,18 @@ class Session(
     fun close() {
         if (stopping.getAndSet(true)) return
         pinLatch.countDown()
-        try {
-            send(Messages.releaseAll())
-            send(Messages.disconnect())
-        } catch (_: Exception) {
+        if (senderThread != null) {
+            // Soltar teclas/botones y avisar al host; el hilo de envío cierra el socket al terminar.
+            outbox.offer(Messages.releaseAll())
+            outbox.offer(Messages.disconnect())
+            outbox.offer(CLOSE_MARKER)
+            Thread {
+                Thread.sleep(500)  // Por si la red está trabada.
+                closeSockets()
+            }.apply { isDaemon = true }.start()
+        } else {
+            Thread { closeSockets() }.apply { isDaemon = true }.start()
         }
-        try {
-            socket?.close()
-        } catch (_: Exception) {
-        }
-        mediaSocket?.close()
     }
 
     // ------------------------------------------------------------------------------------------- control
@@ -189,11 +210,8 @@ class Session(
             if (!stopping.get()) reason = "No se pudo conectar: ${e.message ?: e.javaClass.simpleName}"
         } finally {
             val wasStopping = stopping.getAndSet(true)
-            try {
-                socket?.close()
-            } catch (_: Exception) {
-            }
-            mediaSocket?.close()
+            outbox.offer(CLOSE_MARKER)  // Termina el hilo de envío.
+            closeSockets()
             if (!wasStopping) listener.onClosed(reason, retryable) else listener.onClosed("Desconectado", false)
         }
     }
@@ -248,9 +266,10 @@ class Session(
         if (pinRequired) pairing.save(hostId, ack.deviceName, sock.inetAddress.hostAddress ?: "", keys.pairingSecret)
         mediaRxKey = keys.mediaH2c
         mediaTxKey = keys.mediaC2h
-        synchronized(sendLock) {
-            sendCipher = AesGcm(keys.controlC2h)
-            sendCounter = 0
+        val cipher = AesGcm(keys.controlC2h)
+        senderThread = Thread({ senderLoop(cipher, output!!) }, "lancast-send").apply {
+            isDaemon = true
+            start()
         }
         return AesGcm(keys.controlH2c)
     }
@@ -443,6 +462,8 @@ class Session(
     }
 
     companion object {
+        private val CLOSE_MARKER = ByteArray(0)
+
         fun nowUs(): Long = System.nanoTime() / 1000
 
         fun counterNonce(counter: Long): ByteArray {

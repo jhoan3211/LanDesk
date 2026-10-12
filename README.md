@@ -34,8 +34,11 @@ En el PC hace falta LanCast **1.5** o superior para escribir texto desde el tecl
 | Tocar con dos dedos | Clic derecho |
 | Deslizar dos dedos | Rueda (vertical y horizontal) |
 | Pellizcar | Zoom de la vista (la vista sigue al cursor) |
+| Arrastrar con tres dedos | Mover la vista con zoom (también en modo directo) |
 | Mantener presionado, o doble toque y arrastrar | Arrastrar (botón izquierdo presionado) |
 | Tocar con tres dedos | Abrir / cerrar el teclado |
+
+La **bolita del teclado** a la derecha abre y cierra el teclado (arrástrala para cambiarla de altura; se quita en la barra: *Teclado flotante*). La app gira con el teléfono: en vertical se ve el escritorio completo y con el zoom se llena la pantalla.
 
 En **modo directo** el clic cae donde tocas. La **pestaña** de arriba al centro abre la barra: teclado, modo, monitor, calidad, Ctrl+Alt+Supr, zoom 1:1, estadísticas y desconectar. Con el teclado abierto aparece una barra con Esc, Tab, Ctrl, Alt, Mayús, Win, flechas, Inicio, Fin, Supr y F1–F12 (Ctrl/Alt/Mayús quedan fijados para la siguiente tecla: Ctrl → C = copiar).
 

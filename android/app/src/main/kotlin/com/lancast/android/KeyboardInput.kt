@@ -118,6 +118,7 @@ class KeyboardInput(context: Context, private val send: (ByteArray) -> Unit) : V
             }
 
             override fun sendKeyEvent(event: KeyEvent): Boolean {
+                if (event.isSystem) return false
                 if (event.action == KeyEvent.ACTION_DOWN) handleKey(event)
                 return true
             }
@@ -127,10 +128,14 @@ class KeyboardInput(context: Context, private val send: (ByteArray) -> Unit) : V
     private var composing = ""
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyDown(keyCode, event)
+        // Botones del teléfono (volumen, atrás, multimedia...): los maneja Android, no van al PC.
+        if (event.isSystem || keyCode == KeyEvent.KEYCODE_BACK) return super.onKeyDown(keyCode, event)
         handleKey(event)
         return true
     }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent): Boolean =
+        if (event.isSystem || keyCode == KeyEvent.KEYCODE_BACK) super.onKeyUp(keyCode, event) else true
 
     private fun handleKey(event: KeyEvent) {
         Scancodes.forKeyCode(event.keyCode)?.let {

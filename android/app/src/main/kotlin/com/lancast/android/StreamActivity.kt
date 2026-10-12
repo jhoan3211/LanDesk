@@ -55,6 +55,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private lateinit var toolbar: HorizontalScrollView
     private lateinit var tab: TextView
     private lateinit var keysBar: HorizontalScrollView
+    private lateinit var bubble: TextView
     private lateinit var keyboard: KeyboardInput
     private lateinit var touch: TouchController
 
@@ -84,6 +85,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         }
         port = intent.getIntExtra(EXTRA_PORT, 47984)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        volumeControlStream = android.media.AudioManager.STREAM_MUSIC  // Los botones de volumen controlan el audio del PC.
         if (Build.VERSION.SDK_INT >= 28) {
             // Usar también la zona de la cámara frontal (notch): más superficie para el escritorio.
             window.attributes = window.attributes.apply {
@@ -161,6 +163,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         return StreamConfig(
             monitorId = monitorId, maxWidth = w, maxHeight = h, fps = if (storage.fps == 0) hz else storage.fps,
             codec = codec, audio = storage.audio,
+            autoBitrate = storage.bitrateMbps == 0, bitrateKbps = maxOf(storage.bitrateMbps, 5) * 1000,
         )
     }
 
@@ -314,17 +317,35 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         root.addView(keysBar, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
         keysBar.visibility = View.GONE
 
+        bubble = buildBubble()
+        root.addView(bubble, FrameLayout.LayoutParams(dp(52), dp(52), Gravity.TOP or Gravity.END).apply { marginEnd = dp(12) })
+        bubble.visibility = if (storage.keyboardBubble) View.VISIBLE else View.GONE
+
         root.setOnApplyWindowInsetsListener { _, insets ->
+            val wasOpen = imeHeight > 0
             imeHeight = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(WindowInsets.Type.ime()).bottom
             else @Suppress("DEPRECATION") insets.systemWindowInsetBottom
             keysBar.translationY = -imeHeight.toFloat()
-            if (imeHeight == 0 && keyboardShown) {
+            // El teclado se cerró (p. ej. con el botón atrás): ocultar también la barra de teclas.
+            if (wasOpen && imeHeight == 0 && keyboardShown) {
                 keyboardShown = false
                 keysBar.visibility = View.GONE
             }
+            // Con el teclado abierto la vista sube a la zona libre; al cerrarlo, sin zoom, vuelve al centro.
+            if (imeHeight == 0 && wasOpen && !zoomed()) {
+                panX = 0f
+                panY = 0f
+            }
+            clampPan()
+            layoutVideo()
+            placeBubble()
             insets
         }
-        root.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> layoutVideo() }
+        root.addOnLayoutChangeListener { _, l, t, r, b, ol, ot, or_, ob ->
+            if (r - l != or_ - ol || b - t != ob - ot) clampPan()  // Giró la pantalla: la vista con zoom se reacomoda.
+            layoutVideo()
+            placeBubble()
+        }
         setContentView(root)
         ui.post(statsTicker)
     }
@@ -353,6 +374,13 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             else Toast.makeText(this, "Requiere LanCast instalado como servicio en el PC", Toast.LENGTH_LONG).show()
         })
         add(button("Zoom 1:1") { resetZoom() })
+        lateinit var bubbleToggle: TextView
+        bubbleToggle = button(if (storage.keyboardBubble) "Teclado flotante: sí" else "Teclado flotante: no") {
+            storage.keyboardBubble = !storage.keyboardBubble
+            bubble.visibility = if (storage.keyboardBubble) View.VISIBLE else View.GONE
+            bubbleToggle.text = if (storage.keyboardBubble) "Teclado flotante: sí" else "Teclado flotante: no"
+        }
+        add(bubbleToggle)
         add(button("Estadísticas") {
             storage.showStats = !storage.showStats
             stats.visibility = if (storage.showStats) View.VISIBLE else View.GONE
@@ -419,6 +447,61 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         }
     }
 
+    // Bolita flotante a la derecha: tocarla abre/cierra el teclado; arrastrarla la sube o la baja.
+    private fun buildBubble(): TextView {
+        val b = text("⌨", 22f).apply {
+            gravity = Gravity.CENTER
+            background = Ui.rounded(0xB34A90E2.toInt(), dp(26).toFloat(), dp(1), 0x80FFFFFF.toInt())
+            elevation = dp(4).toFloat()
+        }
+        val slop = dp(8)
+        var downRawY = 0f
+        var startY = 0f
+        var dragged = false
+        @Suppress("ClickableViewAccessibility")
+        b.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    downRawY = e.rawY
+                    startY = v.y
+                    dragged = false
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    val dy = e.rawY - downRawY
+                    if (!dragged && kotlin.math.abs(dy) > slop) dragged = true
+                    if (dragged) {
+                        val (top, bottom) = bubbleRange()
+                        v.y = (startY + dy).coerceIn(top, bottom)
+                    }
+                }
+                android.view.MotionEvent.ACTION_UP -> {
+                    if (dragged) {
+                        val (top, bottom) = bubbleRange()
+                        if (bottom > top) storage.bubbleY = (v.y - top) / (bottom - top)
+                    } else {
+                        toggleKeyboard()
+                    }
+                }
+            }
+            true
+        }
+        return b
+    }
+
+    // Zona vertical permitida para la bolita (sin taparse con el teclado del teléfono).
+    private fun bubbleRange(): Pair<Float, Float> {
+        val size = dp(52).toFloat()
+        val top = dp(40).toFloat()
+        val bottom = maxOf(top, root.height - imeHeight - size - dp(if (keyboardShown) 56 else 12))
+        return top to bottom
+    }
+
+    private fun placeBubble() {
+        if (!::bubble.isInitialized || root.height == 0) return
+        val (top, bottom) = bubbleRange()
+        bubble.y = top + storage.bubbleY.coerceIn(0f, 1f) * (bottom - top)
+    }
+
     private fun toggleToolbar() {
         val show = toolbar.visibility != View.VISIBLE
         toolbar.visibility = if (show) View.VISIBLE else View.GONE
@@ -437,6 +520,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             keyboard.hide()
             hideSystemBars()
         }
+        placeBubble()
     }
 
     private fun chooseMonitor() {
@@ -450,10 +534,12 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     private fun chooseQuality() {
         val resolutions = listOf("screen" to "Igual a esta pantalla", "720" to "720p", "1080" to "1080p", "1440" to "1440p")
-        AlertDialog.Builder(this).setTitle("Resolución").setItems(resolutions.map { it.second }.toTypedArray()) { _, i ->
-            storage.resolution = resolutions[i].first
+        val bitrates = listOf(20, 40, 60, 100, 0)
+        val items = resolutions.map { "Resolución: ${it.second}" } + bitrates.map { if (it == 0) "Bitrate: automático" else "Bitrate: $it Mbps" }
+        AlertDialog.Builder(this).setTitle("Calidad").setItems(items.toTypedArray()) { _, i ->
+            if (i < resolutions.size) storage.resolution = resolutions[i].first else storage.bitrateMbps = bitrates[i - resolutions.size]
             session?.requestStream(streamConfig())
-            Toast.makeText(this, "Aplicando ${resolutions[i].second}…", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Aplicando: ${items[i]}", Toast.LENGTH_SHORT).show()
         }.show()
     }
 
@@ -524,14 +610,26 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun zoomed() = scale > 1.01f
 
+    // Alto de la pantalla que no tapa el teclado (ni su barra de teclas).
+    private fun visibleHeight(): Float {
+        val keys = if (keyboardShown && keysBar.visibility == View.VISIBLE) keysBar.height else 0
+        return (root.height - imeHeight - keys).toFloat().coerceAtLeast(root.height / 4f)
+    }
+
+    // La vista puede moverse a cualquier lugar donde se vea entera; si es más grande que la pantalla (zoom), sus
+    // bordes no pueden despegarse de los de la pantalla. En vertical esto permite subirla sobre el teclado.
     private fun clampPan() {
         val b = baseRect()
         val w = b.width() * scale
         val h = b.height() * scale
-        val maxX = maxOf(0f, (w - root.width) / 2)
-        val maxY = maxOf(0f, (h - root.height) / 2)
-        panX = panX.coerceIn(-maxX, maxX)
-        panY = panY.coerceIn(-maxY, maxY)
+        fun clampAxis(pan: Float, center: Float, size: Float, visible: Float): Float {
+            val left = center - size / 2 + pan
+            val lo = if (size <= visible) 0f else visible - size
+            val hi = if (size <= visible) visible - size else 0f
+            return pan + (left.coerceIn(lo, hi) - left)
+        }
+        panX = clampAxis(panX, b.centerX(), w, root.width.toFloat())
+        panY = clampAxis(panY, b.centerY(), h, visibleHeight())
     }
 
     override fun zoomBy(factor: Float, focusX: Float, focusY: Float) {
@@ -603,7 +701,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             var dx = 0f
             var dy = 0f
             if (px < m) dx = m - px else if (px > root.width - m) dx = root.width - m - px
-            if (py < m) dy = m - py else if (py > root.height - m) dy = root.height - m - py
+            if (py < m) dy = m - py else if (py > visibleHeight() - m) dy = visibleHeight() - m - py
             if (dx != 0f || dy != 0f) {
                 panBy(dx, dy)
                 return

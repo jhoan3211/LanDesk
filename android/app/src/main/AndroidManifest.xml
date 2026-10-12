@@ -26,12 +26,12 @@
             </intent-filter>
         </activity>
 
-        <!-- Horizontal y sin recrearse al girar o abrir el teclado: la sesión sigue viva. -->
+        <!-- Gira con el teléfono (horizontal o vertical, según la rotación automática) sin recrearse al girar o
+             abrir el teclado: la sesión sigue viva y la vista se reacomoda. -->
         <activity
             android:name=".StreamActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation|smallestScreenSize|uiMode|density"
             android:exported="false"
-            android:screenOrientation="sensorLandscape"
             android:theme="@style/Theme.LanCast.Stream"
             android:windowSoftInputMode="adjustNothing|stateHidden" />
     </application>

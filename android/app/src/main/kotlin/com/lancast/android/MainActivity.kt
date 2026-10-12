@@ -102,6 +102,8 @@ class MainActivity : Activity() {
             { storage.resolution }, { storage.resolution = it }))
         col.addView(option("FPS", listOf("0" to "Igual a esta pantalla", "30" to "30", "60" to "60", "90" to "90", "120" to "120"),
             { storage.fps.toString() }, { storage.fps = it.toInt() }))
+        col.addView(option("Bitrate (Wi-Fi)", listOf("40" to "40 Mbps", "60" to "60 Mbps", "100" to "100 Mbps", "0" to "Automático", "20" to "20 Mbps"),
+            { storage.bitrateMbps.toString() }, { storage.bitrateMbps = it.toInt() }))
         col.addView(option("Códec", listOf("auto" to "Automático", "hevc" to "HEVC", "h264" to "H.264", "av1" to "AV1"),
             { storage.codec }, { storage.codec = it }))
         col.addView(option("Audio del PC", listOf("true" to "Sí", "false" to "No"), { storage.audio.toString() }, { storage.audio = it == "true" }))
@@ -112,7 +114,7 @@ class MainActivity : Activity() {
         col.addView(text(
             "Necesitas LanCast 1.5 o superior en el PC y estar en la misma red. La primera vez el PC muestra un PIN de 6 dígitos.\n\n" +
                 "Gestos: un dedo mueve el cursor · toque = clic · dos dedos = clic derecho / rueda · pellizcar = zoom · " +
-                "mantener = arrastrar · tres dedos = teclado.",
+                "tres dedos arrastrando = mover la vista con zoom · mantener = arrastrar · tocar con tres dedos = teclado.",
             12f, Ui.MUTED).apply { margins(top = dp(20)) })
 
         return ScrollView(this).apply {
