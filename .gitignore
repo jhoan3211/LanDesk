@@ -7,3 +7,4 @@ CMakeUserPresets.json
 *.h265
 *.h264
 *.ivf
+dist/
