@@ -890,6 +890,11 @@ std::filesystem::path App::write_support_file() {
         line(std::format("Codificador medido a {}x{}: {:.2f} ms (4:4:4 {:.2f} ms)", hs.calibrated_size.width, hs.calibrated_size.height,
                          hs.encode_420_ms, hs.encode_444_ms));
     }
+    {
+        const auto vmic = audio::virtual_mic_device();
+        line(std::format("Micrófono del cliente: {} · cable virtual: {}", settings_.host.allow_microphone ? "permitido" : "no permitido",
+                         vmic ? vmic->name : "no hay"));
+    }
     if (hs.session_active) {
         line(std::format("Sesión con {} ({})", hs.client_name, hs.client_address));
         if (hs.stream) {
@@ -913,6 +918,9 @@ std::filesystem::path App::write_support_file() {
                          s.fps, s.bitrate_mbps, s.encode_ms, s.network_ms, s.decode_ms, s.present_ms, s.total_ms));
         line(std::format("RTT {:.2f} ms · pérdida {:.2f} % · FEC {} % · reparados {} · perdidos {} · keyframes pedidos {}", s.rtt_ms,
                          s.packet_loss_pct, session_->current_fec(), s.frames_recovered, s.frames_lost, s.keyframe_requests));
+        line(std::format("Unidad de video despierta: {} · micrófono hacia el host: {}",
+                         keep_awake_ ? (keep_awake_->active() ? "activa" : "no disponible") : "apagada",
+                         session_->microphone_active() ? "enviando" : "apagado"));
         if (s.real_latency_ms > 0) {
             line(std::format("Latencia real medida: {:.1f} ms (mín {:.1f}, máx {:.1f})", s.real_latency_ms, s.real_latency_min_ms,
                              s.real_latency_max_ms));
