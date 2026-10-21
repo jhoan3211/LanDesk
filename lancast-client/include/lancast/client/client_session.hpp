@@ -137,6 +137,8 @@ public:
     [[nodiscard]] std::optional<proto::CursorShape> take_cursor_shape();
     [[nodiscard]] proto::CursorPos cursor(int index = 0) const;
     [[nodiscard]] std::optional<std::string> take_clipboard();
+    // Vibraciones pedidas por el host desde la última llamada (la última por mando).
+    [[nodiscard]] std::vector<proto::GamepadRumble> take_rumble();
 
     // La interfaz informa los tiempos de decodificación/presentación de cada frame.
     void report_presented(const media::EncodedFrameInfo& info, std::uint64_t arrival_us, double decode_ms,
@@ -209,6 +211,7 @@ private:
     // Cursor y portapapeles
     std::optional<proto::CursorShape> cursor_shape_;
     std::optional<std::string> clipboard_;
+    std::vector<proto::GamepadRumble> rumble_;
 
     // Audio
     audio::Player player_;
@@ -244,6 +247,7 @@ private:
     std::optional<proto::StreamConfig> last_config_;
     std::optional<proto::StreamConfig> fec_pending_;  // Se envía fuera del candado.
     std::uint64_t fec_clean_since_us_ = 0;
+    int fec_trouble_count_ = 0;  // Muestras con pérdidas desde fec_clean_since_us_.
     void auto_fec_tick(const NetSample& s, std::uint64_t now);
     void remember_mac();
     std::string host_id_;  // Protegido por mutex_.

@@ -61,6 +61,7 @@ enum class MsgType : std::uint8_t {
     SecureAttention = 34, // Cliente -> host: Ctrl+Alt+Supr (solo con el host como servicio).
     Text = 35,            // Cliente -> host: texto escrito (UTF-8, TextMessage); teclados de celular.
     Gamepad = 36,         // Cliente -> host: estado de un mando (GamepadState); 1.7+.
+    GamepadRumble = 37,   // Host -> cliente: vibración de un mando (GamepadRumble); 1.9+.
 
     // Canal de archivos
     FileHello = 40,
@@ -263,6 +264,22 @@ struct GamepadState {
         return r.ok() && g.index < 4 ? std::optional{g} : std::nullopt;
     }
     friend bool operator==(const GamepadState&, const GamepadState&) = default;
+};
+
+// Vibración que el juego pide a un mando virtual (motores 0..255; 0 y 0 = parar).
+struct GamepadRumble {
+    std::uint8_t index = 0;  // 0..3, el mismo índice que GamepadState.
+    std::uint8_t strong = 0;  // Motor grande (baja frecuencia).
+    std::uint8_t weak = 0;  // Motor pequeño (alta frecuencia).
+    void write(ByteWriter& w) const { w.u8(index).u8(strong).u8(weak); }
+    static std::optional<GamepadRumble> read(ByteReader& r) {
+        GamepadRumble g;
+        g.index = r.u8();
+        g.strong = r.u8();
+        g.weak = r.u8();
+        return r.ok() && g.index < 4 ? std::optional{g} : std::nullopt;
+    }
+    friend bool operator==(const GamepadRumble&, const GamepadRumble&) = default;
 };
 
 struct PingPong {

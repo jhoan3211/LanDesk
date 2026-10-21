@@ -571,7 +571,9 @@ TEST_F(EndToEnd, AutoFecFollowsLoss) {
     pump(1000);
     worst_gap = 0;
     const int before_down = client.current_fec();
-    pump(17000);  // 15 s sin pérdidas: baja un escalón.
+    // 15 s sin pérdidas: baja un escalón (margen por si el primer tramo arrancó con algún tropiezo).
+    const std::uint64_t t1 = gpu::now_us();
+    while (client.current_fec() >= before_down && gpu::now_us() - t1 < 35'000'000) pump(500);
     std::printf("  Sin pérdidas: %d %% -> %d %%; mayor hueco entre cuadros %.0f ms\n", before_down, client.current_fec(),
                 static_cast<double>(worst_gap) / 1000.0);
     EXPECT_LT(client.current_fec(), before_down) << "Sin pérdidas el FEC debe bajar";

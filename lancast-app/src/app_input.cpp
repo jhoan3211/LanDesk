@@ -298,10 +298,27 @@ LRESULT App::wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     return DefWindowProcW(hwnd, msg, wp, lp);
 }
 
+void App::stop_rumble() {
+    for (DWORD i = 0; i < pads_rumbling_.size(); ++i) {
+        if (!pads_rumbling_[i]) continue;
+        XINPUT_VIBRATION off{};
+        XInputSetState(i, &off);
+        pads_rumbling_[i] = false;
+    }
+}
+
 void App::poll_gamepads() {
     if (!session_ || !streaming() || !control_enabled() || !settings_.client.forward_gamepads) {
         pads_sent_ = {};  // Sesión nueva: se vuelven a anunciar.
+        stop_rumble();
         return;
+    }
+    // Vibración que pide el juego en el host -> el mismo mando aquí (mismo índice XInput).
+    for (const proto::GamepadRumble& r : session_->take_rumble()) {
+        XINPUT_VIBRATION v{};
+        v.wLeftMotorSpeed = static_cast<WORD>(r.strong * 257);
+        v.wRightMotorSpeed = static_cast<WORD>(r.weak * 257);
+        if (XInputSetState(r.index, &v) == ERROR_SUCCESS) pads_rumbling_[r.index] = r.strong != 0 || r.weak != 0;
     }
     // Sin foco, los mandos siguen conectados en el host pero en reposo (no quedan botones apretados).
     const bool focused = GetForegroundWindow() == hwnd_;

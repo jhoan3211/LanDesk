@@ -13,6 +13,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <thread>
 #include <vector>
 
 #include "lancast/core/bitrate.hpp"
@@ -297,4 +298,108 @@ TEST(Bench, HostLatencyBreakdown) {
                     percentile(latency, 0.95), frames > 0 ? static_cast<double>(bytes) / frames / 1024.0 : 0.0);
     }
     timeEndPeriod(1);
+}
+
+// Latencia del decodificador del cliente (LANCAST_BENCH=1): cuadros reales del codificador, decodificados uno por uno;
+// se mide cuánto tarda decode() y cuándo la GPU terminó de verdad (consulta de evento), por códec y resolución.
+TEST(Bench, DecodeLatency) {
+    if (!bench_enabled()) GTEST_SKIP() << "Define LANCAST_BENCH=1 para medir";
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    mf::MfScope mf;
+    auto dev = gpu::create_device(std::nullopt);
+    ASSERT_TRUE(dev.has_value());
+    const Size cap{2560, 1440};
+    std::array<gpu::ComPtr<ID3D11Texture2D>, 2> captures{make_desktop(*dev, cap), make_desktop(*dev, Size{cap.width + 64, cap.height})};
+    std::printf("\n  %-6s %-10s %-22s | decode() (mediana / p95) | listo en la GPU (mediana / p95) | cuadros de retraso\n", "códec",
+                "tamaño", "decodificador");
+    for (const Codec codec : {Codec::Hevc, Codec::H264}) {
+        for (const Size size : {Size{1920, 1080}, Size{2560, 1440}}) {
+            // Cuadros codificados de verdad (con movimiento: dos capturas distintas alternadas).
+            auto packer = gpu::YuvPacker::create(*dev, gpu::PackConfig{cap, DXGI_FORMAT_B8G8R8A8_UNORM, size, false, false});
+            ASSERT_TRUE(packer.has_value());
+            std::array<gpu::ComPtr<ID3D11Texture2D>, 5> pool;
+            for (auto& t : pool) {
+                t = *gpu::create_texture(dev->device.Get(), size.width, size.height, DXGI_FORMAT_NV12,
+                                         D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+            }
+            mf::EncoderConfig ec{codec, size, 60, auto_bitrate_mbps(size.width, size.height, 60, codec) * 1000, RateControl::Cbr, true};
+            auto enc = mf::create_encoder(*dev, ec);
+            if (!enc) continue;
+            std::mutex mu;
+            std::vector<std::vector<std::uint8_t>> frames;
+            (*enc)->set_output_callback([&](mf::EncodedPacket&& p) {
+                std::scoped_lock lock(mu);
+                if (frames.empty() || p.timestamp_us != 0) frames.push_back(std::move(p.data));
+            });
+            for (int i = 0; i < 90; ++i) {
+                ID3D11Texture2D* t = pool[static_cast<std::size_t>(i) % pool.size()].Get();
+                (*packer)->process(captures[static_cast<std::size_t>(i) % 2].Get(), t);
+                ASSERT_TRUE((*enc)->submit(t, static_cast<std::uint64_t>(i + 1) * 16'666, i == 0).has_value());
+                Sleep(16);
+            }
+            Sleep(200);
+            enc->reset();
+
+            auto dec = mf::create_decoder(*dev, codec, size);
+            ASSERT_TRUE(dec.has_value()) << dec.error().message();
+            // LANCAST_BENCH_KEEPALIVE=N: mantener despierta la unidad de video (cuadro diminuto cada N ms), como el cliente.
+            wchar_t ka_env[8]{};
+            const int ka_ms = GetEnvironmentVariableW(L"LANCAST_BENCH_KEEPALIVE", ka_env, 8) > 0 ? _wtoi(ka_env) : 0;
+            std::optional<mf::VideoEngineKeepAwake> awake;
+            if (ka_ms > 0) {
+                awake.emplace(dev->luid, ka_ms);
+                for (int i = 0; i < 200 && !awake->active(); ++i) Sleep(10);
+                ASSERT_TRUE(awake->active());
+            }
+            D3D11_QUERY_DESC qd{D3D11_QUERY_EVENT, 0};
+            gpu::ComPtr<ID3D11Query> ev;
+            dev->device->CreateQuery(&qd, &ev);
+            std::vector<double> call_ms;
+            std::vector<double> ready_ms;
+            int pending = 0;
+            int max_delay = 0;
+            std::scoped_lock lock(mu);
+            for (std::size_t i = 0; i < frames.size(); ++i) {
+                const std::uint64_t t0 = gpu::now_us();
+                auto out = (*dec)->decode(frames[i], (i + 1) * 16'666);
+                const std::uint64_t t1 = gpu::now_us();
+                ASSERT_TRUE(out.has_value()) << out.error().message();
+                if (!*out) {
+                    ++pending;  // Este cuadro todavía no salió: el decodificador retiene cuadros.
+                    max_delay = std::max(max_delay, pending);
+                    continue;
+                }
+                pending = 0;
+                // ¿Cuándo terminó la GPU? Se copia un píxel de la salida y se espera el evento.
+                D3D11_BOX box{0, 0, 0, 2, 2, 1};
+                static gpu::ComPtr<ID3D11Texture2D> probe;
+                if (!probe) probe = *gpu::create_texture(dev->device.Get(), 2, 2, DXGI_FORMAT_NV12, 0);
+                dev->context->CopySubresourceRegion(probe.Get(), 0, 0, 0, 0, (*out)->texture.Get(), (*out)->subresource, &box);
+                dev->context->End(ev.Get());
+                dev->context->Flush();
+                BOOL done = FALSE;
+                while (dev->context->GetData(ev.Get(), &done, sizeof(done), 0) != S_OK || !done) YieldProcessor();
+                const std::uint64_t t2 = gpu::now_us();
+                if (i >= 5) {
+                    call_ms.push_back(static_cast<double>(t1 - t0) / 1000.0);
+                    ready_ms.push_back(static_cast<double>(t2 - t0) / 1000.0);
+                }
+                // Pausa entre cuadros (LANCAST_BENCH_GAP en ms; 10 por defecto, como un stream a ~60 fps).
+                wchar_t gap_env[8]{};
+                const int gap = GetEnvironmentVariableW(L"LANCAST_BENCH_GAP", gap_env, 8) > 0 ? _wtoi(gap_env) : 10;
+                if (gap > 0 && GetEnvironmentVariableW(L"LANCAST_BENCH_SPIN", nullptr, 0) > 0) {
+                    // Misma pausa, pero el procesador sin dormir (¿el retraso es de la CPU o de la GPU?).
+                    const std::uint64_t until = gpu::now_us() + static_cast<std::uint64_t>(gap) * 1000;
+                    while (gpu::now_us() < until) YieldProcessor();
+                } else if (gap > 0) {
+                    Sleep(static_cast<DWORD>(gap));
+                }
+            }
+            awake.reset();
+            std::printf("  %-6s %-10s %-22s | %6.2f / %6.2f ms         | %6.2f / %6.2f ms                | %d\n",
+                        std::string{to_string(codec)}.c_str(), std::format("{}x{}", size.width, size.height).c_str(),
+                        (*dec)->name().substr(0, 22).c_str(), percentile(call_ms, 0.5), percentile(call_ms, 0.95),
+                        percentile(ready_ms, 0.5), percentile(ready_ms, 0.95), max_delay);
+        }
+    }
 }

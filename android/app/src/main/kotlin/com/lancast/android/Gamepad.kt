@@ -3,10 +3,15 @@ package com.lancast.android
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.os.Build
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
 import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import com.lancast.core.GamepadRumble
 import com.lancast.core.GamepadState
 import com.lancast.core.Messages
 import kotlin.math.abs
@@ -101,11 +106,43 @@ class GamepadInput(private val send: (ByteArray) -> Unit) {
         return true
     }
 
+    // Vibración que pide el juego: el mando físico con ese índice; el 3 (mando en pantalla) hace vibrar el teléfono.
+    private val rumbling = HashSet<Vibrator>()
+
+    fun rumble(context: Context, r: GamepadRumble) {
+        val vibrator = if (r.index == 3) {
+            phoneVibrator(context)
+        } else {
+            val deviceId = slots.entries.firstOrNull { it.value == r.index }?.key ?: return
+            val dev = InputDevice.getDevice(deviceId) ?: return
+            if (Build.VERSION.SDK_INT >= 31) dev.vibratorManager.defaultVibrator else @Suppress("DEPRECATION") dev.vibrator
+        } ?: return
+        if (!vibrator.hasVibrator()) return
+        val amp = maxOf(r.strong, r.weak)
+        if (amp == 0) {
+            vibrator.cancel()
+            rumbling.remove(vibrator)
+            return
+        }
+        // Sigue vibrando (onda que se repite) hasta que el juego pida parar.
+        val level = if (vibrator.hasAmplitudeControl()) amp.coerceIn(1, 255) else VibrationEffect.DEFAULT_AMPLITUDE
+        vibrator.vibrate(VibrationEffect.createWaveform(longArrayOf(0, 1000), intArrayOf(0, level), 1))
+        rumbling.add(vibrator)
+    }
+
+    private fun phoneVibrator(context: Context): Vibrator? = if (Build.VERSION.SDK_INT >= 31) {
+        (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+    } else {
+        @Suppress("DEPRECATION") context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+    }
+
     // Al salir del stream: los mandos se quitan del PC.
     fun disconnectAll() {
         for ((_, s) in states) send(Messages.gamepad(s.copy(connected = false)))
         states.clear()
         slots.clear()
+        rumbling.forEach { it.cancel() }
+        rumbling.clear()
     }
 
     companion object {

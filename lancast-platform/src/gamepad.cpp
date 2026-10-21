@@ -30,6 +30,19 @@ struct VirtualPads::Impl {
     PVIGEM_CLIENT client = nullptr;
     bool failed = false;
     std::array<PVIGEM_TARGET, kMaxPads> pads{};
+    struct Ctx {
+        Impl* impl = nullptr;
+        std::uint8_t index = 0;
+    };
+    std::array<Ctx, kMaxPads> ctx{};  // userData de la notificación de cada mando (direcciones fijas).
+    std::mutex rumble_mutex;
+    RumbleCallback on_rumble;
+
+    static VOID CALLBACK notification(PVIGEM_CLIENT, PVIGEM_TARGET, UCHAR strong, UCHAR weak, UCHAR, LPVOID user) {
+        auto* c = static_cast<Ctx*>(user);
+        std::scoped_lock lock(c->impl->rumble_mutex);
+        if (c->impl->on_rumble) c->impl->on_rumble(c->index, strong, weak);
+    }
 
     bool connect() {
         if (client != nullptr) return true;
@@ -47,6 +60,7 @@ struct VirtualPads::Impl {
 
     void remove(std::size_t i) {
         if (pads[i] == nullptr) return;
+        vigem_target_x360_unregister_notification(pads[i]);
         vigem_target_remove(client, pads[i]);
         vigem_target_free(pads[i]);
         pads[i] = nullptr;
@@ -84,6 +98,10 @@ void VirtualPads::update(const proto::GamepadState& state) {
             return;
         }
         impl_->pads[i] = pad;
+        impl_->ctx[i] = {impl_.get(), static_cast<std::uint8_t>(i)};
+        if (!VIGEM_SUCCESS(vigem_target_x360_register_notification(impl_->client, pad, &Impl::notification, &impl_->ctx[i]))) {
+            log::warn("Mando virtual {}: sin vibración", i + 1);
+        }
         log::info("Mando virtual {} conectado (Xbox 360)", i + 1);
     }
     XUSB_REPORT report{};
@@ -95,6 +113,11 @@ void VirtualPads::update(const proto::GamepadState& state) {
     report.sThumbRX = state.right_x;
     report.sThumbRY = state.right_y;
     vigem_target_x360_update(impl_->client, impl_->pads[i], report);
+}
+
+void VirtualPads::set_rumble_callback(RumbleCallback cb) {
+    std::scoped_lock lock(impl_->rumble_mutex);
+    impl_->on_rumble = std::move(cb);
 }
 
 void VirtualPads::remove_all() {

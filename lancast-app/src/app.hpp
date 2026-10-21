@@ -166,6 +166,7 @@ private:
     // Cliente
     std::unique_ptr<client::ClientSession> session_;
     std::unique_ptr<VideoRenderer> renderer_;
+    std::optional<mf::VideoEngineKeepAwake> keep_awake_;  // Solo mientras hay stream.
     std::vector<client::DiscoveredHost> discovered_;
     std::uint64_t last_discovery_us_ = 0;
     std::thread discovery_thread_;
@@ -199,6 +200,8 @@ private:
     bool mod_shift_[2] = {false, false};
     std::set<DWORD> typed_keys_;  // Teclas cuyo carácter ya se mandó como texto (host en un teléfono).
     std::string last_remote_clipboard_;
+    std::array<bool, 4> pads_rumbling_{};  // Mandos locales vibrando por pedido del host.
+    void stop_rumble();
     std::array<proto::GamepadState, 4> pads_sent_{};  // Último estado enviado de cada mando (connected = presente).
     std::uint64_t pads_scan_us_ = 0;                   // Los huecos vacíos se revisan cada 2 s (XInput es lento ahí).
     std::uint64_t last_present_us_ = 0;

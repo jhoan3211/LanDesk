@@ -59,6 +59,7 @@ interface SessionListener {
     fun onCursorPos(pos: CursorPos) {}
     fun onCursorShape(shape: CursorShape) {}
     fun onClipboard(text: String) {}
+    fun onRumble(rumble: GamepadRumble) {}
     fun onMessage(text: String) {}
     fun onClosed(reason: String, retryable: Boolean) {}
 }
@@ -141,6 +142,7 @@ class Session(
         private set
     @Volatile private var lastConfig: StreamConfig? = null
     private var fecCleanSinceUs = 0L
+    private var fecTroubles = 0  // Muestras con pérdidas desde fecCleanSinceUs.
 
     private fun withFec(config: StreamConfig): StreamConfig {
         val c = if (autoFec) config.copy(fecPercent = currentFec) else config
@@ -159,15 +161,20 @@ class Session(
         if (!autoFec) return
         val cur = currentFec
         var next = cur
+        if (fecCleanSinceUs == 0L) fecCleanSinceUs = now
         if (lossPct > 0.3 || lost > 0 || recovered > 0) {
-            fecCleanSinceUs = now
+            fecTroubles++
             val target = (Math.ceil(lossPct * 3).toInt() + 10).coerceIn(10, 40)
             next = minOf(40, maxOf(target, cur + if (lost > 0) 10 else 0))
-        } else if (fecCleanSinceUs == 0L) {
+            if (next > cur) {
+                fecCleanSinceUs = now
+                fecTroubles = 0
+            }
+        } else if (now - fecCleanSinceUs > 15_000_000) {
+            // 15 s sin pérdidas (o con un solo tropiezo aislado): baja de a 5 %.
+            if (fecTroubles <= 1 && cur > 5) next = maxOf(5, cur - 5)
             fecCleanSinceUs = now
-        } else if (now - fecCleanSinceUs > 15_000_000 && cur > 5) {
-            next = maxOf(5, cur - 5)
-            fecCleanSinceUs = now
+            fecTroubles = 0
         }
         if (next == cur) return
         currentFec = next
@@ -414,6 +421,7 @@ class Session(
             MsgType.CURSOR_POS -> CursorPos.read(r)?.let { if (it.streamIndex == 0) listener.onCursorPos(it) }
             MsgType.CURSOR_SHAPE -> CursorShape.read(r)?.let { listener.onCursorShape(it) }
             MsgType.CLIPBOARD -> listener.onClipboard(r.str())
+            MsgType.GAMEPAD_RUMBLE -> GamepadRumble.read(r)?.let { listener.onRumble(it) }
             MsgType.DISCONNECT -> {
                 if (!stopping.getAndSet(true)) listener.onClosed("El host cerró la sesión", false)
                 try {

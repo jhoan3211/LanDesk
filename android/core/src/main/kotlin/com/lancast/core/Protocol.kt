@@ -40,6 +40,7 @@ object MsgType {
     const val SECURE_ATTENTION = 34
     const val TEXT = 35
     const val GAMEPAD = 36
+    const val GAMEPAD_RUMBLE = 37
     const val FILE_HELLO = 40
     const val FILE_OFFER = 41
     const val FILE_ACCEPT = 42
@@ -339,6 +340,16 @@ data class GamepadState(
         const val B = 0x2000
         const val X = 0x4000
         const val Y = 0x8000
+    }
+}
+
+// Vibración que pide el juego en el PC (motores 0..255; los dos en 0 = parar). Host -> cliente, 1.9+.
+data class GamepadRumble(val index: Int, val strong: Int, val weak: Int) {
+    companion object {
+        fun read(r: ByteReader): GamepadRumble? {
+            val g = GamepadRumble(r.u8(), r.u8(), r.u8())
+            return if (r.ok && g.index < 4) g else null
+        }
     }
 }
 

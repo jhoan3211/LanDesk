@@ -709,6 +709,9 @@ struct HostService::Impl {
         cb.cursor_shape = [&s](const proto::CursorShape& shape) { s.channel->send(proto::encode(proto::MsgType::CursorShape, shape)); };
         cb.cursor_pos = [&s](const proto::CursorPos& pos) { s.channel->send(proto::encode(proto::MsgType::CursorPos, pos)); };
         s.streamer = std::make_unique<Streamer>(*s.media, std::move(cb));
+        s.pads.set_rumble_callback([&s](std::uint8_t index, std::uint8_t strong, std::uint8_t weak) {
+            s.channel->send(proto::encode(proto::MsgType::GamepadRumble, proto::GamepadRumble{index, strong, weak}));
+        });
 
         std::vector<std::uint8_t> msg;
         while (running && s.channel->recv(msg, 4u * 1024 * 1024)) {

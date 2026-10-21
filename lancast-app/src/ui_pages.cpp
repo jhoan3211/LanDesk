@@ -475,6 +475,15 @@ void App::draw_stream_settings(bool live) {
         ImGui::EndDisabled();
         if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
         help("Paquetes de paridad Reed-Solomon: recuperan pérdidas sin esperar retransmisiones. 10–20% es lo recomendado.");
+        row("Decodificación");
+        if (ImGui::Checkbox("Mantener despierta la unidad de video##awake", &settings_.client.keep_decoder_awake)) save_settings();
+        if (keep_awake_) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(keep_awake_->active() ? "activa" : "no disponible");
+        }
+        help("Algunas GPU (sobre todo las integradas de AMD) apagan la unidad de video entre cuadros y cada cuadro paga el "
+             "despertar. Mantenerla ocupada con un cuadro diminuto baja la decodificación a 1440p de ~10 a ~5 ms. Gasta "
+             "un poco más de energía: apágalo en un portátil con batería si no te importa esa diferencia.");
         ImGui::EndTable();
     }
 

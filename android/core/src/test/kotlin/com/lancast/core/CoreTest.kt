@@ -11,6 +11,13 @@ import kotlin.test.assertTrue
 
 class CoreTest {
     @Test
+    fun gamepadRumbleMatchesHostLayout() {
+        assertEquals(GamepadRumble(3, 255, 17), GamepadRumble.read(ByteReader(ByteWriter().u8(3).u8(255).u8(17).toByteArray())))
+        assertEquals(null, GamepadRumble.read(ByteReader(ByteWriter().u8(4).u8(1).u8(1).toByteArray())))
+        assertEquals(null, GamepadRumble.read(ByteReader(ByteWriter().u8(1).u8(1).toByteArray())))
+    }
+
+    @Test
     fun bytesAreLittleEndian() {
         val w = ByteWriter().u8(1).u16(0x0203).u32(0x04050607).u64(0x08090A0B0C0D0E0FL).str("ñ").f32(1.5f)
         val b = w.toByteArray()

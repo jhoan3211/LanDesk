@@ -5,11 +5,13 @@
 // - Decodificador: el MFT de decodificación de Windows con DXVA (D3D11), salida en textura NV12 de la GPU.
 // Así LanCast es un único .exe sin DLL de terceros.
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "lancast/core/settings.hpp"
@@ -100,6 +102,22 @@ public:
 // ten_bit: el stream es de 10 bits (HDR): salida P010 en vez de NV12.
 [[nodiscard]] platform::Result<std::unique_ptr<Decoder>> create_decoder(const gpu::Device& device, Codec codec, Size size,
                                                                         bool ten_bit = false);
+
+// Mantiene despierta la unidad de video de la GPU decodificando un cuadro diminuto cada `period_ms` en un dispositivo
+// aparte. Algunas GPU (p. ej. las AMD integradas) la apagan o bajan su reloj entre cuadros, y cada cuadro real paga
+// el despertar: medido a 1440p, HEVC baja de ~10 a ~5 ms y H.264 de ~14 a ~6 ms. Cuesta un poco de consumo.
+class VideoEngineKeepAwake {
+public:
+    explicit VideoEngineKeepAwake(std::uint64_t adapter_luid, int period_ms = 3);
+    ~VideoEngineKeepAwake();
+    VideoEngineKeepAwake(const VideoEngineKeepAwake&) = delete;
+    VideoEngineKeepAwake& operator=(const VideoEngineKeepAwake&) = delete;
+    [[nodiscard]] bool active() const { return active_; }
+
+private:
+    std::atomic<bool> active_{false};
+    std::jthread thread_;  // Último miembro: se detiene antes que lo demás.
+};
 
 // Códecs que este equipo puede decodificar (MFT de Windows con aceleración por hardware).
 [[nodiscard]] std::vector<Codec> available_decoders();

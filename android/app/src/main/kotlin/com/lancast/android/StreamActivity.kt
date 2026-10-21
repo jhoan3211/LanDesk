@@ -44,6 +44,7 @@ import com.lancast.core.CursorPos
 import com.lancast.core.CursorShape
 import com.lancast.core.FileProgress
 import com.lancast.core.FileTransfer
+import com.lancast.core.GamepadRumble
 import com.lancast.core.MouseButtonId
 import com.lancast.core.HostInfo
 import com.lancast.core.HostServer
@@ -185,6 +186,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     }
 
     // PC -> teléfono.
+    override fun onRumble(rumble: GamepadRumble) = ui.post {
+        if (::gamepads.isInitialized && session != null) gamepads.rumble(this, rumble)
+    }.let {}
+
     override fun onClipboard(text: String) {
         if (session?.hostInfo?.clipboardAllowed != true) return
         lastRemoteClipboard = text

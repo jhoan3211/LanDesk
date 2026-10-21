@@ -278,6 +278,19 @@ TEST(Protocol, ColorFeaturesAreOptional) {
     }
 }
 
+TEST(Protocol, GamepadRumble) {
+    const GamepadRumble g{3, 255, 17};
+    ByteWriter w;
+    g.write(w);
+    ByteReader r(w.data());
+    EXPECT_EQ(GamepadRumble::read(r), g);
+    // Índice fuera de rango: se descarta.
+    ByteWriter bad;
+    GamepadRumble{4, 1, 1}.write(bad);
+    ByteReader rb(bad.data());
+    EXPECT_FALSE(GamepadRumble::read(rb).has_value());
+}
+
 TEST(Protocol, GamepadAndWakeOnLanFields) {
     GamepadState g;
     g.index = 2;

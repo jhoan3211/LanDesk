@@ -129,6 +129,7 @@ void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& 
         last_config_ = first;
         fec_pending_.reset();
         fec_clean_since_us_ = 0;
+        fec_trouble_count_ = 0;
     }
     control_ = std::thread([this, host, caps, first] { control_thread(host, caps, first); });
 }
@@ -269,17 +270,22 @@ void ClientSession::auto_fec_tick(const NetSample& s, std::uint64_t now) {
     const int cur = fec_current_.load();
     int next = cur;
     const bool trouble = s.loss_pct > 0.3f || s.frames_lost > 0 || s.fec_recovered > 0;
+    if (fec_clean_since_us_ == 0) fec_clean_since_us_ = now;
     if (trouble) {
         // Con pérdidas: sube enseguida (el triple de lo que se pierde, mínimo 10 %; +10 si ya no alcanzó).
-        fec_clean_since_us_ = now;
+        ++fec_trouble_count_;
         const int target = std::clamp(static_cast<int>(std::ceil(s.loss_pct * 3.0f)) + 10, 10, 40);
         next = std::min(40, std::max(target, cur + (s.frames_lost > 0 ? 10 : 0)));
-    } else if (fec_clean_since_us_ == 0) {
+        if (next > cur) {
+            fec_clean_since_us_ = now;
+            fec_trouble_count_ = 0;
+        }
+    } else if (now - fec_clean_since_us_ > 15'000'000) {
+        // 15 s sin pérdidas (o con un solo tropiezo aislado, p. ej. un paquete reordenado): baja de a 5 %. Por cable
+        // queda en 5 %: menos paquetes y cuadros que salen antes.
+        if (fec_trouble_count_ <= 1 && cur > 5) next = std::max(5, cur - 5);
         fec_clean_since_us_ = now;
-    } else if (now - fec_clean_since_us_ > 15'000'000 && cur > 5) {
-        // 15 s sin pérdidas: baja de a 5 % (por cable queda en 5 %: menos paquetes, cuadros que salen antes).
-        next = std::max(5, cur - 5);
-        fec_clean_since_us_ = now;
+        fec_trouble_count_ = 0;
     }
     if (next == cur) return;
     fec_current_ = next;
@@ -578,6 +584,13 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                     slots_[c->stream_index > 1 ? 0 : c->stream_index].cursor = *c;
                 }
                 break;
+            case proto::MsgType::GamepadRumble:
+                if (auto g = proto::GamepadRumble::read(r)) {
+                    std::scoped_lock lock(mutex_);
+                    std::erase_if(rumble_, [&](const proto::GamepadRumble& x) { return x.index == g->index; });
+                    rumble_.push_back(*g);
+                }
+                break;
             case proto::MsgType::Clipboard:
                 if (auto t = proto::TextMessage::read(r)) {
                     std::scoped_lock lock(mutex_);
@@ -810,6 +823,11 @@ std::optional<proto::CursorShape> ClientSession::take_cursor_shape() {
 proto::CursorPos ClientSession::cursor(int index) const {
     std::scoped_lock lock(mutex_);
     return slots_[static_cast<std::size_t>(index)].cursor;
+}
+
+std::vector<proto::GamepadRumble> ClientSession::take_rumble() {
+    std::scoped_lock lock(mutex_);
+    return std::exchange(rumble_, {});
 }
 
 std::optional<std::string> ClientSession::take_clipboard() {

@@ -407,6 +407,11 @@ void App::render() {
     bool new_video = false;
     client::Frame last_frame;
     double decode_ms = 0;
+    if (streaming() && settings_.client.keep_decoder_awake) {
+        if (!keep_awake_) keep_awake_.emplace(device_.luid);
+    } else if (keep_awake_) {
+        keep_awake_.reset();
+    }
     if (streaming() && renderer_) {
         const auto stream = session_->stream();
         for (auto& f : session_->take_frames()) {
