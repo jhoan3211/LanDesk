@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cstring>
 #include <cmath>
 #include <format>
 #include <map>
@@ -77,6 +78,11 @@ struct Session {
     std::string last_remote_clipboard;
     std::unique_ptr<sys::MarkerWindow> latency_marker;  // Solo mientras el cliente mide la latencia.
     gamepad::VirtualPads pads;  // Mandos del cliente (se quitan al cerrar la sesión).
+    // Micrófono del cliente -> cable de audio virtual (se abre con el primer paquete).
+    std::wstring mic_device;
+    audio::Player mic_player;
+    audio::Format mic_format{0, 0};
+    std::uint32_t mic_seq = 0;
 };
 
 struct HostService::Impl {
@@ -315,10 +321,14 @@ struct HostService::Impl {
             if (!n) break;
             if (*n == 0) continue;
             const auto header = media::PacketHeader::read({buf.data(), *n});
-            if (!header || header->type != media::PacketType::ClientHello) continue;
+            if (!header || (header->type != media::PacketType::ClientHello && header->type != media::PacketType::Mic)) continue;
             auto s = current();
             if (!s || !s->media_rx || from.ip != s->address.ip) continue;
             if (!s->media_rx->open({buf.data(), *n}, payload)) continue;
+            if (header->type == media::PacketType::Mic) {
+                on_mic(*s, payload);
+                continue;
+            }
             const auto old = s->media->endpoint();
             if (!old || !(*old == from)) {
                 s->media->set_endpoint(from);
@@ -327,6 +337,37 @@ struct HostService::Impl {
                 if (s->second) s->second->request_keyframe();
             }
         }
+    }
+
+    // Micrófono del cliente: PCM de 16 bits (mismo formato que el audio del host) al cable de audio virtual.
+    void on_mic(Session& s, std::span<const std::uint8_t> payload) {
+        ByteReader r(payload);
+        const std::uint32_t seq = r.u32();
+        r.u64();
+        const std::uint32_t rate = r.u32();
+        const std::uint8_t channels = r.u8();
+        const std::uint16_t frames = r.u16();
+        if (!r.ok() || rate < 8000 || rate > 192000 || channels == 0 || channels > 2) return;
+        const auto bytes = r.raw(static_cast<std::size_t>(frames) * channels * 2);
+        if (!r.ok()) return;
+        if (seq <= s.mic_seq && s.mic_seq - seq < 1000) return;  // Repetido o viejo.
+        s.mic_seq = seq;
+        std::wstring device;
+        {
+            std::scoped_lock lock(mutex);
+            if (!settings.host.allow_microphone) return;
+            device = s.mic_device;
+        }
+        if (device.empty()) return;
+        if (s.mic_format.sample_rate != rate || s.mic_format.channels != channels) {
+            s.mic_format = audio::Format{rate, channels};
+            s.mic_player.set_target_ms(30);
+            s.mic_player.start(s.mic_format, device);
+            log::info("Micrófono del cliente: {} Hz, {} canal(es) al cable de audio virtual", rate, channels);
+        }
+        std::vector<std::int16_t> pcm(static_cast<std::size_t>(frames) * channels);
+        std::memcpy(pcm.data(), bytes.data(), pcm.size() * 2);
+        s.mic_player.push(pcm);
     }
 
     void discovery_loop() {
@@ -591,6 +632,13 @@ struct HostService::Impl {
             }
         }
         info.gamepad_available = hs.allow_input && gamepad::driver_available();
+        if (hs.allow_microphone) {
+            if (const auto dev = audio::virtual_mic_device()) {
+                info.mic_available = true;
+                std::scoped_lock lock(mutex);
+                s.mic_device = dev->id;
+            }
+        }
         for (const auto& a : net::local_addresses()) {
             if (a.mask != 0 && (a.ip & a.mask) == (s.address.ip & a.mask)) {
                 info.mac = a.mac;

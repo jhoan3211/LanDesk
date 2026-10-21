@@ -154,6 +154,7 @@ std::string settings_to_toml(const AppSettings& s) {
     h.set("allow_clipboard", s.host.allow_clipboard);
     h.set("allow_files", s.host.allow_files);
     h.set("allow_audio", s.host.allow_audio);
+    h.set("allow_microphone", s.host.allow_microphone);
     h.set("private_networks_only", s.host.private_networks_only);
     h.set("ip_whitelist", s.host.ip_whitelist);
     h.set("receive_folder", s.host.receive_folder);
@@ -171,6 +172,7 @@ std::string settings_to_toml(const AppSettings& s) {
     c.set("show_stats", s.client.show_stats);
     c.set("show_graphs", s.client.show_graphs);
     c.set("keep_decoder_awake", s.client.keep_decoder_awake);
+    c.set("microphone", s.client.microphone);
     c.set("simulate_loss_percent", static_cast<std::int64_t>(s.client.simulate_loss_percent));
     c.set("toolbar_collapsed", s.client.toolbar_collapsed);
     c.set("toolbar_tab_percent", static_cast<std::int64_t>(s.client.toolbar_tab_percent));
@@ -209,6 +211,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.host.allow_clipboard = h->get_bool("allow_clipboard").value_or(s.host.allow_clipboard);
         s.host.allow_files = h->get_bool("allow_files").value_or(s.host.allow_files);
         s.host.allow_audio = h->get_bool("allow_audio").value_or(s.host.allow_audio);
+        s.host.allow_microphone = h->get_bool("allow_microphone").value_or(s.host.allow_microphone);
         s.host.private_networks_only = h->get_bool("private_networks_only").value_or(s.host.private_networks_only);
         s.host.ip_whitelist = h->get_strings("ip_whitelist");
         s.host.receive_folder = h->get_string("receive_folder").value_or("");
@@ -226,6 +229,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.client.show_stats = c->get_bool("show_stats").value_or(s.client.show_stats);
         s.client.show_graphs = c->get_bool("show_graphs").value_or(false);
         s.client.keep_decoder_awake = c->get_bool("keep_decoder_awake").value_or(true);
+        s.client.microphone = c->get_bool("microphone").value_or(false);
         s.client.simulate_loss_percent = clamp_u32(c->get_int("simulate_loss_percent").value_or(0), 0, 50);
         s.client.toolbar_collapsed = c->get_bool("toolbar_collapsed").value_or(false);
         s.client.toolbar_tab_percent = clamp_u32(c->get_int("toolbar_tab_percent").value_or(100), 50, 300);

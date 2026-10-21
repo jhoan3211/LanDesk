@@ -253,6 +253,21 @@ void App::draw_stream_toolbar() {
         ImGui::EndCombo();
     }
 
+    // Micrófono de este equipo -> host (solo si el host tiene un cable de audio virtual para recibirlo).
+    if (info && info->mic_available) {
+        const bool on = settings_.client.microphone;
+        const char* mic_label = on ? "Micrófono encendido" : "Micrófono apagado";
+        place(button_w(mic_label));
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(mic_label)) {
+            settings_.client.microphone = !on;
+            session_->set_microphone(settings_.client.microphone);
+            save_settings();
+        }
+        if (on) ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Tu micrófono llega al host como un micrófono más (para llamadas o juegos allá).");
+    }
+
     // Segunda ventana: un botón, una lista o nada (si el host tiene un solo monitor).
     if (second_) {
         place(button_w(std::format("Cerrar ventana del monitor {}", second_monitor_id_)));

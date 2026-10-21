@@ -589,6 +589,23 @@ void App::draw_host_page() {
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.host.allow_clipboard);
     changed |= ImGui::Checkbox("Permitir transferencia de archivos", &settings_.host.allow_files);
     changed |= ImGui::Checkbox("Transmitir el audio del equipo", &settings_.host.allow_audio);
+    changed |= ImGui::Checkbox("Recibir el micrófono del cliente", &settings_.host.allow_microphone);
+    if (settings_.host.allow_microphone) {
+        if (gpu::now_us() - virtual_mic_checked_us_ > 3'000'000) {
+            const auto dev = audio::virtual_mic_device();
+            virtual_mic_name_ = dev ? dev->name : std::string{};
+            virtual_mic_checked_us_ = gpu::now_us();
+        }
+        ImGui::Indent();
+        if (!virtual_mic_name_.empty()) {
+            ImGui::TextColored(kMuted, "Llega a \"%s\": en Discord, Teams o el juego elige su micrófono \"CABLE Output\".",
+                               virtual_mic_name_.c_str());
+        } else {
+            ImGui::TextColored(kMuted, "Falta un cable de audio virtual: instala VB-Cable (gratis, vb-audio.com/Cable) y el "
+                                       "micrófono del cliente aparecerá aquí como \"CABLE Output\".");
+        }
+        ImGui::Unindent();
+    }
     if (ImGui::Checkbox("Mostrar una barra roja arriba mientras alguien está conectado", &settings_.host.session_banner)) {
         changed = true;
         update_session_banner();

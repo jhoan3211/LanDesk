@@ -9,7 +9,9 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
@@ -30,7 +32,9 @@ public:
     LoopbackCapture(const LoopbackCapture&) = delete;
     LoopbackCapture& operator=(const LoopbackCapture&) = delete;
 
-    void start(Callback callback);
+    enum class Source { Loopback, Microphone };
+    // Loopback: lo que suena en el equipo. Microphone: el micrófono predeterminado (de comunicaciones).
+    void start(Callback callback, Source source = Source::Loopback);
     void stop();
     [[nodiscard]] Format format() const;
 
@@ -38,6 +42,7 @@ private:
     void run();
 
     Callback callback_;
+    Source source_ = Source::Loopback;
     std::atomic<bool> running_{false};
     std::thread thread_;
     mutable std::mutex mutex_;
@@ -51,7 +56,8 @@ public:
     Player(const Player&) = delete;
     Player& operator=(const Player&) = delete;
 
-    void start(const Format& format);
+    // device_id vacío = la salida predeterminada.
+    void start(const Format& format, std::wstring device_id = {});
     void stop();
     // Encola muestras intercaladas int16 en el formato dado en start().
     void push(std::span<const std::int16_t> samples);
@@ -65,6 +71,7 @@ private:
     void run();
 
     Format format_;
+    std::wstring device_id_;
     std::atomic<bool> running_{false};
     std::thread thread_;
     mutable std::mutex mutex_;
@@ -76,5 +83,13 @@ private:
     std::atomic<float> volume_{1.0f};
     std::atomic<std::uint32_t> target_ms_{20};
 };
+
+struct Device {
+    std::wstring id;
+    std::string name;
+};
+// Entrada de un cable de audio virtual (VB-Cable "CABLE Input", VoiceMeeter): lo que se reproduce ahí lo ven las
+// demás aplicaciones como un micrófono. Así el micrófono del cliente llega a Discord, Teams o un juego en el host.
+[[nodiscard]] std::optional<Device> virtual_mic_device();
 
 }  // namespace lancast::audio

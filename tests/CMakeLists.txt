@@ -36,6 +36,7 @@ add_executable(lancast-platform-tests
     platform/encode_bench.cpp
     platform/gamepad_test.cpp
     platform/calibration_test.cpp
+    platform/audio_test.cpp
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
 target_link_libraries(lancast-platform-tests PRIVATE lancast::platform GTest::gtest_main d3d11 dxgi winmm)
 lancast_set_warnings(lancast-platform-tests)

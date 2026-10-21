@@ -122,6 +122,9 @@ public:
     // FEC automático: la paridad se ajusta según las pérdidas que ve el cliente (sin pérdidas baja hasta 5 %; con
     // pérdidas sube enseguida, hasta 40 %). Cambiarla no reinicia el codificador ni corta la imagen.
     void set_auto_fec(bool on) noexcept { auto_fec_ = on; }
+    // Enviar el micrófono predeterminado de este equipo al host (solo si el host lo acepta: HostInfo::mic_available).
+    void set_microphone(bool on) noexcept { microphone_ = on; }
+    [[nodiscard]] bool microphone_active() const noexcept { return mic_active_; }
     [[nodiscard]] int current_fec() const noexcept { return fec_current_.load(); }
     void stop_second_stream();
     [[nodiscard]] std::optional<std::string> take_second_stream_error();
@@ -188,6 +191,8 @@ private:
     std::array<std::uint8_t, 32> media_tx_key_{};
     std::uint16_t media_port_ = 0;
     std::optional<proto::HostInfo> host_info_;
+    std::atomic<bool> microphone_{false};
+    std::atomic<bool> mic_active_{false};
 
     // Video: un "slot" por stream (principal y segunda ventana). Campos protegidos por mutex_, salvo el
     // ensamblador y el unidor de slices, que solo usa el hilo de medios.

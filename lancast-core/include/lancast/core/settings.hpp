@@ -69,6 +69,7 @@ struct HostSettings {
     bool allow_clipboard = true;
     bool allow_files = true;
     bool allow_audio = true;
+    bool allow_microphone = true;  // Recibir el micrófono del cliente (necesita un cable de audio virtual).
     bool private_networks_only = true;
     std::vector<std::string> ip_whitelist;  // Vacía = cualquier IP privada.
     std::string receive_folder;             // Vacío = Descargas\LanCast.
@@ -90,6 +91,7 @@ struct ClientSettings {
     bool relative_mouse = false;
     bool show_stats = false;
     bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).
+    bool microphone = false;  // Enviar el micrófono de este equipo al host.
     bool keep_decoder_awake = true;  // Mantener despierta la unidad de video de la GPU (menos latencia, algo más de consumo).
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
     // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.

@@ -1,10 +1,12 @@
 package com.lancast.android
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.graphics.RectF
 import android.net.wifi.WifiManager
@@ -75,6 +77,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private lateinit var filesStatus: TextView
     private var pad: OnScreenPad? = null
     private lateinit var gamepads: GamepadInput
+    private val mic = MicSender { session }
+    private var micButton: TextView? = null
     private var files: FileTransfer? = null
     private var pickingFiles = false  // El selector de archivos tapa la pantalla: la sesión sigue viva.
     @Volatile private var lastRemoteClipboard: String? = null
@@ -143,6 +147,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         if (pickingFiles) return
         session?.history()?.let { if (it.isNotEmpty()) AppLog.lastStats = it }
         gamepads.disconnectAll()
+        mic.stop()
+        micButton?.text = "Micrófono: no"
         pad?.release()
         files?.close()
         files = null
@@ -577,6 +583,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         add(button("Zoom 1:1") { resetZoom() })
         add(button("Archivos") { pickFiles() })
         add(button("Mando") { togglePad() })
+        micButton = button(if (mic.active) "Micrófono: sí" else "Micrófono: no") { toggleMic() }
+        add(micButton!!)
         lateinit var bubbleToggle: TextView
         bubbleToggle = button(if (storage.keyboardBubble) "Teclado flotante: sí" else "Teclado flotante: no") {
             storage.keyboardBubble = !storage.keyboardBubble
@@ -934,6 +942,30 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
         private const val REQUEST_FILES = 7
+        private const val REQUEST_MIC = 8
+    }
+
+    // Micrófono del teléfono -> PC (llega allá como un micrófono si el PC tiene un cable de audio virtual).
+    private fun toggleMic() {
+        if (mic.active) {
+            mic.stop()
+        } else if (session?.hostInfo?.micAvailable != true) {
+            AlertDialog.Builder(this).setTitle("Micrófono")
+                .setMessage("Para que tu micrófono llegue al PC como un micrófono más (Discord, Teams, juegos), el PC necesita " +
+                    "un cable de audio virtual: instala VB-Cable (gratis, vb-audio.com/Cable), deja activado \"Recibir el " +
+                    "micrófono del cliente\" en LanCast y vuelve a conectar. Allá elige el micrófono \"CABLE Output\".")
+                .setPositiveButton("Entendido", null).show()
+        } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
+        } else if (!mic.start()) {
+            Toast.makeText(this, "No se pudo abrir el micrófono", Toast.LENGTH_LONG).show()
+        }
+        micButton?.text = if (mic.active) "Micrófono: sí" else "Micrófono: no"
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_MIC && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) toggleMic()
     }
 
     // ------------------------------------------------------------------------------------------- mando, mouse, S Pen y teclado físico

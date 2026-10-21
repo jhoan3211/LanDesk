@@ -658,16 +658,56 @@ void ClientSession::media_thread() {
     std::uint64_t last_ping = 0;
     std::mt19937 rng{std::random_device{}()};
 
+    // Envío cifrado al host: desde este hilo y desde el del micrófono.
+    std::mutex tx_mutex;
+    auto seal_send = [&](media::PacketType type, std::span<const std::uint8_t> body) {
+        std::scoped_lock lock(tx_mutex);
+        std::uint8_t header[media::kPacketHeaderSize];
+        media::PacketHeader{type, tx_seq++}.write(header);
+        if (tx.seal(header, body, sealed)) sock->send_to(host_media, sealed);
+    };
+    // Micrófono: mono, en trozos de hasta 10 ms, mismo formato que el audio del host.
+    audio::LoopbackCapture mic;
+    std::uint32_t mic_seq = 0;
+    std::vector<std::int16_t> mono;
+    auto on_mic = [&](std::span<const std::int16_t> pcm, std::uint32_t frames, const audio::Format& fmt) {
+        mono.resize(frames);
+        for (std::uint32_t f = 0; f < frames; ++f) {
+            mono[f] = static_cast<std::int16_t>((static_cast<int>(pcm[2 * f]) + pcm[2 * f + 1]) / 2);
+        }
+        const std::uint32_t chunk = std::max<std::uint32_t>(fmt.sample_rate / 100, 1);
+        const std::uint64_t now = gpu::now_us();
+        for (std::uint32_t off = 0; off < frames; off += chunk) {
+            const std::uint32_t n = std::min(chunk, frames - off);
+            ByteWriter w(32 + n * 2);
+            w.u32(++mic_seq).u64(now).u32(fmt.sample_rate).u8(1).u16(static_cast<std::uint16_t>(n));
+            w.raw({reinterpret_cast<const std::uint8_t*>(mono.data() + off), static_cast<std::size_t>(n) * 2});
+            seal_send(media::PacketType::Mic, w.data());
+        }
+    };
+
     std::optional<proto::StreamConfig> fec_send;
     while (!stopping_) {
         const std::uint64_t now = gpu::now_us();
         if (now - last_hello > 500'000) {
             // Registra/renueva el endpoint UDP en el host (atraviesa el firewall del cliente: es tráfico saliente).
-            std::uint8_t header[media::kPacketHeaderSize];
-            media::PacketHeader{media::PacketType::ClientHello, tx_seq++}.write(header);
             const std::uint8_t hello_body[1] = {1};
-            if (tx.seal(header, hello_body, sealed)) sock->send_to(host_media, sealed);
+            seal_send(media::PacketType::ClientHello, hello_body);
             last_hello = now;
+            bool want_mic = false;
+            if (microphone_) {
+                std::scoped_lock lock(mutex_);
+                want_mic = host_info_ && host_info_->mic_available;
+            }
+            if (want_mic != mic_active_) {
+                if (want_mic) {
+                    mic.start(on_mic, audio::LoopbackCapture::Source::Microphone);
+                } else {
+                    mic.stop();
+                }
+                mic_active_ = want_mic;
+                log::info("Micrófono hacia el host: {}", want_mic ? "activado" : "apagado");
+            }
         }
         if (now - last_ping > 1'000'000) {
             send_message(proto::encode(proto::MsgType::Ping, proto::PingPong{gpu::now_us(), 0}));
@@ -734,6 +774,8 @@ void ClientSession::media_thread() {
             handle_audio(payload);
         }
     }
+    mic.stop();
+    mic_active_ = false;
 }
 
 void ClientSession::handle_video(std::span<const std::uint8_t> payload) {

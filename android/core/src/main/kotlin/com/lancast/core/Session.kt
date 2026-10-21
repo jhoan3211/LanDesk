@@ -156,6 +156,40 @@ class Session(
     }
 
     // Una ventana de 250 ms: pérdida de paquetes (%), cuadros perdidos y cuadros reparados con la paridad.
+    // Envío cifrado por UDP al host (desde el hilo de medios y desde el del micrófono).
+    private val txLock = Any()
+    private var mediaTx: AesGcm? = null
+    private var mediaTarget: Pair<java.net.InetAddress, Int>? = null
+    private var txSeq = 1L
+    private var micSeq = 0L
+
+    private fun sendMedia(type: Int, body: ByteArray) {
+        val datagram = synchronized(txLock) {
+            val tx = mediaTx ?: return
+            val header = packetHeader(type, txSeq++)
+            header + tx.encrypt(header, header, body)
+        }
+        val (host, port) = mediaTarget ?: return
+        try {
+            mediaSocket?.send(DatagramPacket(datagram, datagram.size, host, port))
+        } catch (_: Exception) {
+        }
+    }
+
+    // Micrófono de este teléfono hacia el PC (PCM de 16 bits mono). Solo si el host lo acepta (hostInfo.micAvailable).
+    fun sendMic(pcm: ShortArray, frames: Int, sampleRate: Int) {
+        if (hostInfo?.micAvailable != true) return
+        val chunk = maxOf(sampleRate / 100, 1)
+        var off = 0
+        while (off < frames) {
+            val n = minOf(chunk, frames - off)
+            val w = ByteWriter().u32(++micSeq and 0xFFFFFFFFL).u64(nowUs()).u32(sampleRate.toLong()).u8(1).u16(n)
+            for (i in off until off + n) w.u16(pcm[i].toInt() and 0xFFFF)
+            sendMedia(MediaConst.TYPE_MIC, w.toByteArray())
+            off += n
+        }
+    }
+
     private fun autoFecTick(lossPct: Double, lost: Int, recovered: Int, now: Long) {
         val cfg = lastConfig ?: return
         if (!autoFec) return
@@ -444,8 +478,10 @@ class Session(
         sock.soTimeout = 20
         val host = hostAddress ?: return
         val rx = AesGcm(mediaRxKey)
-        val tx = AesGcm(mediaTxKey)
-        var txSeq = 1L
+        synchronized(txLock) {
+            mediaTx = AesGcm(mediaTxKey)
+            mediaTarget = host to mediaPort
+        }
         val buf = ByteArray(2048)
         val packet = DatagramPacket(buf, buf.size)
         var lastHello = 0L
@@ -470,13 +506,7 @@ class Session(
             val now = nowUs()
             if (now - lastHello > 500_000) {
                 // Registra/renueva el endpoint UDP en el host (tráfico saliente: atraviesa el firewall del celular).
-                val header = packetHeader(MediaConst.TYPE_CLIENT_HELLO, txSeq++)
-                val sealed = tx.encrypt(header, header, byteArrayOf(1))
-                val datagram = header + sealed
-                try {
-                    sock.send(DatagramPacket(datagram, datagram.size, host, mediaPort))
-                } catch (_: Exception) {
-                }
+                sendMedia(MediaConst.TYPE_CLIENT_HELLO, byteArrayOf(1))
                 lastHello = now
             }
             if (now - lastPing > 1_000_000) {

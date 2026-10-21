@@ -519,6 +519,34 @@ TEST_F(EndToEnd, QualityPresetLatency) {
 }
 
 // FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+// Micrófono: el host lo ofrece solo con un cable de audio virtual, y el cliente solo lo enciende si el host lo ofrece.
+TEST_F(EndToEnd, MicrophoneOnlyWhenHostHasVirtualCable) {
+    const bool cable = audio::virtual_mic_device().has_value();
+    const AppSettings host_settings = make_settings("Host-Mic", root_ / L"host-recv-mic");
+    const AppSettings client_settings = make_settings("Cliente-Mic", root_ / L"client-recv-mic");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.set_microphone(true);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Mic"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    EXPECT_EQ(client.host_info()->mic_available, cable);
+    if (cable) {
+        EXPECT_TRUE(wait_for([&] { return client.microphone_active(); }, 3000));
+        client.set_microphone(false);
+        EXPECT_TRUE(wait_for([&] { return !client.microphone_active(); }, 3000));
+    } else {
+        Sleep(1500);
+        EXPECT_FALSE(client.microphone_active()) << "Sin cable virtual en el host no se envía el micrófono";
+    }
+    client.disconnect();
+    host.stop();
+}
+
 TEST_F(EndToEnd, AutoFecFollowsLoss) {
     const AppSettings host_settings = make_settings("Host-FEC", root_ / L"host-recv-fec");
     const AppSettings client_settings = make_settings("Cliente-FEC", root_ / L"client-recv-fec");

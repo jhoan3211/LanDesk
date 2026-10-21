@@ -167,6 +167,8 @@ struct HostInfo {
     // Opcional (1.9+): calibración del codificador a la resolución nativa, en centésimas de ms (0 = sin medir).
     std::uint16_t encode_420_cms = 0;
     std::uint16_t encode_444_cms = 0;
+    // Opcional (1.9+): el host recibe el micrófono del cliente (tiene un cable de audio virtual y lo permite).
+    bool mic_available = false;
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };

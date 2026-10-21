@@ -15,6 +15,7 @@ object MediaConst {
     const val TYPE_VIDEO = 1
     const val TYPE_AUDIO = 2
     const val TYPE_CLIENT_HELLO = 3
+    const val TYPE_MIC = 4  // Cliente -> host: micrófono (mismo formato que el audio del host); 1.9+.
     const val FLAG_KEYFRAME = 0x01
     const val FLAG_SLICE = 0x02
     const val FLAG_STREAM1 = 0x04

@@ -189,7 +189,7 @@ TEST(Protocol, HostInfoSecureDesktopIsOptional) {
     ByteWriter w;
     h.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 1 - 7 - 1 - 4);  // Sin secure_desktop (1.3), MAC/mando (1.7), plataforma (1.8) ni calibración (1.9).
+    old_bytes.resize(old_bytes.size() - 1 - 7 - 1 - 4 - 1);  // Sin secure_desktop (1.3), MAC/mando (1.7), plataforma (1.8), calibración ni micrófono (1.9).
     ByteReader r(old_bytes);
     const auto out = HostInfo::read(r);
     ASSERT_TRUE(out.has_value());
@@ -314,13 +314,15 @@ TEST(Protocol, GamepadAndWakeOnLanFields) {
     h.host_name = "PC";
     h.mac = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
     h.gamepad_available = true;
+    h.mic_available = true;
     const HostInfo hb = roundtrip(h);
     EXPECT_EQ(hb.mac, h.mac);
     EXPECT_TRUE(hb.gamepad_available);
+    EXPECT_TRUE(hb.mic_available);
     ByteWriter hw;
     h.write(hw);
     std::vector<std::uint8_t> old = hw.take();
-    old.resize(old.size() - 7 - 1 - 4);  // Sin MAC/mando (1.7), plataforma (1.8) ni calibración (1.9).
+    old.resize(old.size() - 7 - 1 - 4 - 1);  // Sin MAC/mando (1.7), plataforma (1.8), calibración ni micrófono (1.9).
     ByteReader hr(old);
     const auto ho = HostInfo::read(hr);
     ASSERT_TRUE(ho.has_value());

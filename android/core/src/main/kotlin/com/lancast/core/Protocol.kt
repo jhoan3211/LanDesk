@@ -150,6 +150,7 @@ data class HostInfo(
     val mac: ByteArray = ByteArray(6),       // 1.7+: MAC del PC para Wake-on-LAN (ceros = no se sabe).
     val gamepadAvailable: Boolean = false,   // 1.7+: el PC tiene el driver de mandos virtuales (ViGEmBus).
     val platform: Int = 0,                   // 1.8+: 0 = Windows, 1 = Android (teléfono compartiendo su pantalla).
+    val micAvailable: Boolean = false,       // 1.9+: el PC recibe el micrófono del cliente (cable de audio virtual).
 ) {
     val hasMac: Boolean get() = mac.any { it.toInt() != 0 }
 
@@ -183,7 +184,12 @@ data class HostInfo(
                 gamepad = r.bool()
             }
             val platform = if (r.ok && r.remaining >= 1) r.u8() else 0
-            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad, platform)
+            if (r.ok && r.remaining >= 4) {  // 1.9+: calibración del codificador (no se usa en el teléfono).
+                r.u16()
+                r.u16()
+            }
+            val mic = r.ok && r.remaining >= 1 && r.bool()
+            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad, platform, mic)
             else null
         }
     }

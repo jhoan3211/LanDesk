@@ -4,11 +4,13 @@
 
 #include <audioclient.h>
 #include <mmdeviceapi.h>
+#include <functiondiscoverykeys_devpkey.h>
 #include <mmreg.h>
 #include <ksmedia.h>
 
 #include <algorithm>
 #include <cmath>
+#include <cwctype>
 
 #include "lancast/core/log.hpp"
 #include "lancast/platform/system.hpp"
@@ -34,11 +36,36 @@ ComPtr<IMMDevice> default_render_device() {
     return device;
 }
 
+ComPtr<IMMDevice> default_capture_device() {
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) return {};
+    ComPtr<IMMDevice> device;
+    enumerator->GetDefaultAudioEndpoint(eCapture, eCommunications, &device);
+    return device;
+}
+
+ComPtr<IMMDevice> device_by_id(const std::wstring& id) {
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) return {};
+    ComPtr<IMMDevice> device;
+    enumerator->GetDevice(id.c_str(), &device);
+    return device;
+}
+
+std::string utf8(const std::wstring& w) {
+    if (w.empty()) return {};
+    const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), nullptr, 0, nullptr, nullptr);
+    std::string out(static_cast<std::size_t>(n), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, w.data(), static_cast<int>(w.size()), out.data(), n, nullptr, nullptr);
+    return out;
+}
+
 }  // namespace
 
-void LoopbackCapture::start(Callback callback) {
+void LoopbackCapture::start(Callback callback, Source source) {
     stop();
     callback_ = std::move(callback);
+    source_ = source;
     running_ = true;
     thread_ = std::thread([this] { run(); });
 }
@@ -59,7 +86,8 @@ void LoopbackCapture::run() {
     std::vector<std::int16_t> out;
 
     while (running_) {
-        ComPtr<IMMDevice> device = default_render_device();
+        const bool mic = source_ == Source::Microphone;
+        ComPtr<IMMDevice> device = mic ? default_capture_device() : default_render_device();
         ComPtr<IAudioClient> client;
         if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client))) {
             Sleep(500);
@@ -83,15 +111,17 @@ void LoopbackCapture::run() {
         }
         const Format fmt = format();
 
-        HRESULT hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, 20 * kHns, 0, mix, nullptr);
+        HRESULT hr = client->Initialize(AUDCLNT_SHAREMODE_SHARED, mic ? 0 : AUDCLNT_STREAMFLAGS_LOOPBACK, 20 * kHns, 0, mix, nullptr);
         CoTaskMemFree(mix);
         ComPtr<IAudioCaptureClient> capture;
         if (FAILED(hr) || FAILED(client->GetService(IID_PPV_ARGS(&capture))) || FAILED(client->Start())) {
-            log::warn("Audio: no se pudo iniciar la captura loopback (0x{:08X})", static_cast<std::uint32_t>(hr));
+            log::warn("Audio: no se pudo iniciar la captura {} (0x{:08X})", mic ? "del micrófono" : "loopback",
+                      static_cast<std::uint32_t>(hr));
             Sleep(1000);
             continue;
         }
-        log::info("Audio: capturando {} Hz, {} canales de origen", fmt.sample_rate, src_channels);
+        log::info("Audio: capturando {} a {} Hz, {} canales de origen", mic ? "el micrófono" : "el sonido del equipo", fmt.sample_rate,
+                  src_channels);
 
         bool device_ok = true;
         while (running_ && device_ok) {
@@ -133,9 +163,10 @@ void LoopbackCapture::run() {
     }
 }
 
-void Player::start(const Format& format) {
+void Player::start(const Format& format, std::wstring device_id) {
     stop();
     format_ = format;
+    device_id_ = std::move(device_id);
     {
         std::scoped_lock lock(mutex_);
         ring_.assign(static_cast<std::size_t>(format.sample_rate) * format.channels / 2, 0);  // 500 ms
@@ -182,7 +213,7 @@ void Player::run() {
     platform::detail::ComScope com;
     sys::RealtimeThread mmcss(L"Pro Audio", true);
     while (running_) {
-        ComPtr<IMMDevice> device = default_render_device();
+        ComPtr<IMMDevice> device = device_id_.empty() ? default_render_device() : device_by_id(device_id_);
         ComPtr<IAudioClient> client;
         if (!device || FAILED(device->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &client))) {
             Sleep(500);
@@ -256,6 +287,38 @@ void Player::run() {
         client->Stop();
         CloseHandle(event);
     }
+}
+
+std::optional<Device> virtual_mic_device() {
+    platform::detail::ComScope com;
+    ComPtr<IMMDeviceEnumerator> enumerator;
+    if (FAILED(CoCreateInstance(__uuidof(MMDeviceEnumerator), nullptr, CLSCTX_ALL, IID_PPV_ARGS(&enumerator)))) return std::nullopt;
+    ComPtr<IMMDeviceCollection> list;
+    if (FAILED(enumerator->EnumAudioEndpoints(eRender, DEVICE_STATE_ACTIVE, &list))) return std::nullopt;
+    UINT count = 0;
+    list->GetCount(&count);
+    for (UINT i = 0; i < count; ++i) {
+        ComPtr<IMMDevice> dev;
+        ComPtr<IPropertyStore> props;
+        if (FAILED(list->Item(i, &dev)) || FAILED(dev->OpenPropertyStore(STGM_READ, &props))) continue;
+        PROPVARIANT v;
+        PropVariantInit(&v);
+        std::wstring name;
+        if (SUCCEEDED(props->GetValue(PKEY_Device_FriendlyName, &v)) && v.vt == VT_LPWSTR) name = v.pwszVal;
+        PropVariantClear(&v);
+        std::wstring lower = name;
+        for (auto& c : lower) c = static_cast<wchar_t>(std::towlower(c));
+        if (lower.find(L"cable input") == std::wstring::npos && lower.find(L"voicemeeter input") == std::wstring::npos &&
+            lower.find(L"voicemeeter vaio") == std::wstring::npos) {
+            continue;
+        }
+        LPWSTR id = nullptr;
+        if (FAILED(dev->GetId(&id))) continue;
+        Device d{id, utf8(name)};
+        CoTaskMemFree(id);
+        return d;
+    }
+    return std::nullopt;
 }
 
 }  // namespace lancast::audio

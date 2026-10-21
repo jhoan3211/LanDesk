@@ -159,6 +159,7 @@ void App::start_connect(const std::string& address) {
         return;
     }
     session_->set_auto_fec(settings_.client.stream.fec_auto);
+    session_->set_microphone(settings_.client.microphone);
     session_->connect(*ep, caps, make_stream_config());
     last_client_state_ = client::State::Connecting;
 
