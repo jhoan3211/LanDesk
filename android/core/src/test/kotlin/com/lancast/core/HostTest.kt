@@ -94,6 +94,7 @@ class HostTest {
             // 1) PIN.
             val c1 = ClientSide()
             val s1 = Session(deviceId, "Cliente-Prueba", pairing, c1)
+            s1.autoFec = false  // Aquí se comprueba que el host recibe el FEC pedido tal cual.
             c1.onPin = {
                 Thread {
                     assertTrue(host.pinLatch.await(5, TimeUnit.SECONDS))

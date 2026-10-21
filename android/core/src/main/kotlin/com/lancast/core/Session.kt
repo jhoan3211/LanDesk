@@ -134,8 +134,46 @@ class Session(
     private var clockOffsetUs = 0L  // reloj del host - reloj local (por ping)
     private var hasClock = false
 
+    // FEC automático: la paridad se ajusta según las pérdidas (sin pérdidas baja hasta 5 %, con pérdidas sube hasta
+    // 40 %). Cambiarla no reinicia el codificador del host ni corta la imagen.
+    @Volatile var autoFec = true
+    @Volatile var currentFec = 10
+        private set
+    @Volatile private var lastConfig: StreamConfig? = null
+    private var fecCleanSinceUs = 0L
+
+    private fun withFec(config: StreamConfig): StreamConfig {
+        val c = if (autoFec) config.copy(fecPercent = currentFec) else config
+        lastConfig = c
+        return c
+    }
+
     fun connect(host: String, port: Int, caps: ClientCaps, config: StreamConfig) {
-        controlThread = Thread({ controlLoop(host, port, caps, config) }, "lancast-control").apply { start() }
+        val first = withFec(config)
+        controlThread = Thread({ controlLoop(host, port, caps, first) }, "lancast-control").apply { start() }
+    }
+
+    // Una ventana de 250 ms: pérdida de paquetes (%), cuadros perdidos y cuadros reparados con la paridad.
+    private fun autoFecTick(lossPct: Double, lost: Int, recovered: Int, now: Long) {
+        val cfg = lastConfig ?: return
+        if (!autoFec) return
+        val cur = currentFec
+        var next = cur
+        if (lossPct > 0.3 || lost > 0 || recovered > 0) {
+            fecCleanSinceUs = now
+            val target = (Math.ceil(lossPct * 3).toInt() + 10).coerceIn(10, 40)
+            next = minOf(40, maxOf(target, cur + if (lost > 0) 10 else 0))
+        } else if (fecCleanSinceUs == 0L) {
+            fecCleanSinceUs = now
+        } else if (now - fecCleanSinceUs > 15_000_000 && cur > 5) {
+            next = maxOf(5, cur - 5)
+            fecCleanSinceUs = now
+        }
+        if (next == cur) return
+        currentFec = next
+        val c = cfg.copy(fecPercent = next)
+        lastConfig = c
+        send(c.encode())
     }
 
     fun submitPin(value: String) {
@@ -174,7 +212,7 @@ class Session(
         mediaSocket?.close()
     }
 
-    fun requestStream(config: StreamConfig) = send(config.encode())
+    fun requestStream(config: StreamConfig) = send(withFec(config).encode())
 
     // Últimos 30 s en ventanas de 250 ms (copia).
     fun history(): List<StatSample> = synchronized(history) { history.toList() }
@@ -353,8 +391,11 @@ class Session(
             }
             MsgType.STREAM_STARTED -> StreamStarted.read(r)?.let { s ->
                 if (s.streamIndex != 0) return
+                // Mismo stream (cambió solo el bitrate, el FEC o el audio): la imagen sigue sin esperar un keyframe.
+                val old = stream
+                val same = old != null && old.epoch == s.epoch && old.codec == s.codec && old.width == s.width && old.height == s.height
                 stream = s
-                waitingKeyframe = true
+                if (!same) waitingKeyframe = true
                 listener.onStreamStarted(s)
             }
             MsgType.STREAM_ERROR -> listener.onMessage(r.str(4096))
@@ -413,6 +454,9 @@ class Session(
         var gNetMaxUs = 0L
         var gLost = assembler.framesLost
         var gRecovered = assembler.framesRecovered
+        var gPackets = 0L
+        var gMinSeq = Long.MAX_VALUE
+        var gMaxSeq = Long.MIN_VALUE
 
         while (!stopping.get()) {
             val now = nowUs()
@@ -462,8 +506,14 @@ class Session(
                 gBytes = 0
                 gNetUs = 0
                 gNetMaxUs = 0
+                val expected = if (gPackets > 0 && gMaxSeq >= gMinSeq) (gMaxSeq - gMinSeq + 1).toDouble() else 0.0
+                val lossPct = if (expected > 0) ((expected - gPackets) * 100.0 / expected).coerceAtLeast(0.0) else 0.0
+                autoFecTick(lossPct, sample.lost, sample.recovered, now)
                 gLost = assembler.framesLost
                 gRecovered = assembler.framesRecovered
+                gPackets = 0
+                gMinSeq = Long.MAX_VALUE
+                gMaxSeq = Long.MIN_VALUE
             }
 
             try {
@@ -483,6 +533,12 @@ class Session(
             val payload = rx.decrypt(header, header, buf, MediaConst.PACKET_HEADER_SIZE, n - MediaConst.PACKET_HEADER_SIZE) ?: continue
             when (header[0].toInt()) {
                 MediaConst.TYPE_VIDEO -> {
+                    // Secuencia del datagrama (para medir la pérdida de paquetes de video).
+                    var seq = 0L
+                    for (i in 0 until 8) seq = seq or ((header[4 + i].toLong() and 0xFF) shl (8 * i))
+                    gPackets++
+                    if (seq < gMinSeq) gMinSeq = seq
+                    if (seq > gMaxSeq) gMaxSeq = seq
                     val frame = handleVideo(payload)
                     if (frame != null) {
                         val arrival = nowUs()

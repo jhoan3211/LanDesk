@@ -3,6 +3,7 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <random>
 
@@ -121,7 +122,15 @@ void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& 
         stats_ = Stats{};
         best_rtt_us_ = 1e12;
     }
-    control_ = std::thread([this, host, caps, initial] { control_thread(host, caps, initial); });
+    proto::StreamConfig first = initial;
+    {
+        std::scoped_lock lock(mutex_);
+        if (auto_fec_ && first.stream_index == 0) first.fec_percent = static_cast<std::uint8_t>(fec_current_.load());
+        last_config_ = first;
+        fec_pending_.reset();
+        fec_clean_since_us_ = 0;
+    }
+    control_ = std::thread([this, host, caps, first] { control_thread(host, caps, first); });
 }
 
 void ClientSession::submit_pin(const std::string& pin) {
@@ -224,7 +233,38 @@ void ClientSession::send_message(const std::vector<std::uint8_t>& encoded) {
 }
 
 void ClientSession::request_stream(const proto::StreamConfig& config) {
-    send_message(proto::encode(proto::MsgType::StreamConfig, config));
+    proto::StreamConfig c = config;
+    if (c.stream_index == 0) {
+        std::scoped_lock lock(mutex_);
+        if (auto_fec_) c.fec_percent = static_cast<std::uint8_t>(fec_current_.load());
+        last_config_ = c;
+    }
+    send_message(proto::encode(proto::MsgType::StreamConfig, c));
+}
+
+void ClientSession::auto_fec_tick(const NetSample& s, std::uint64_t now) {
+    if (!auto_fec_ || !last_config_) return;
+    const int cur = fec_current_.load();
+    int next = cur;
+    const bool trouble = s.loss_pct > 0.3f || s.frames_lost > 0 || s.fec_recovered > 0;
+    if (trouble) {
+        // Con pérdidas: sube enseguida (el triple de lo que se pierde, mínimo 10 %; +10 si ya no alcanzó).
+        fec_clean_since_us_ = now;
+        const int target = std::clamp(static_cast<int>(std::ceil(s.loss_pct * 3.0f)) + 10, 10, 40);
+        next = std::min(40, std::max(target, cur + (s.frames_lost > 0 ? 10 : 0)));
+    } else if (fec_clean_since_us_ == 0) {
+        fec_clean_since_us_ = now;
+    } else if (now - fec_clean_since_us_ > 15'000'000 && cur > 5) {
+        // 15 s sin pérdidas: baja de a 5 % (por cable queda en 5 %: menos paquetes, cuadros que salen antes).
+        next = std::max(5, cur - 5);
+        fec_clean_since_us_ = now;
+    }
+    if (next == cur) return;
+    fec_current_ = next;
+    last_config_->fec_percent = static_cast<std::uint8_t>(next);
+    fec_pending_ = last_config_;
+    log::info("FEC automático: {} % -> {} % (pérdida {:.1f} %, cuadros perdidos {}, reparados {})", cur, next, s.loss_pct,
+              s.frames_lost, s.fec_recovered);
 }
 
 void ClientSession::request_keyframe(int index) { request_recovery(proto::RecoveryReason::NeedKeyframe, index); }
@@ -470,8 +510,12 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                     std::scoped_lock lock(mutex_);
                     player_format_ = fmt;
                     message_ = s->notes;
+                    // Mismo stream (cambió solo el bitrate, el FEC o el audio): la imagen sigue sin esperar un keyframe.
+                    const auto& old = slots_[0].info;
+                    const bool same = old && old->epoch == s->epoch && old->codec == s->codec && old->width == s->width &&
+                                      old->height == s->height && old->chroma_444 == s->chroma_444 && old->hdr == s->hdr;
                     slots_[0].info = std::move(*s);
-                    slots_[0].waiting_keyframe = true;
+                    if (!same) slots_[0].waiting_keyframe = true;
                 }
                 break;
             case proto::MsgType::StreamError:
@@ -574,6 +618,7 @@ void ClientSession::media_thread() {
     std::uint64_t last_ping = 0;
     std::mt19937 rng{std::random_device{}()};
 
+    std::optional<proto::StreamConfig> fec_send;
     while (!stopping_) {
         const std::uint64_t now = gpu::now_us();
         if (now - last_hello > 500'000) {
@@ -620,6 +665,12 @@ void ClientSession::media_thread() {
             fine_min_seq_ = std::min(fine_min_seq_, header->seq);
             fine_max_seq_ = std::max(fine_max_seq_, header->seq);
             tick_history(gpu::now_us());
+            fec_send = std::move(fec_pending_);
+            fec_pending_.reset();
+        }
+        if (fec_send) {
+            send_message(proto::encode(proto::MsgType::StreamConfig, *fec_send));
+            fec_send.reset();
         }
         if (header->type == media::PacketType::Video) {
             if (simulated_loss_ > 0 && std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) continue;
@@ -765,6 +816,7 @@ void ClientSession::tick_history(std::uint64_t now) {
     fine_last_idr_ = stats_.keyframe_requests;
     net_history_.push_back(s);
     while (net_history_.size() > 48) net_history_.pop_front();  // 12 s
+    auto_fec_tick(s, now);
     fine_start_us_ = now;
     fine_bytes_ = 0;
     fine_packets_ = 0;

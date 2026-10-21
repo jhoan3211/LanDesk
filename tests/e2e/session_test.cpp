@@ -517,3 +517,65 @@ TEST_F(EndToEnd, QualityPresetLatency) {
     client.disconnect();
     host.stop();
 }
+
+// FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+TEST_F(EndToEnd, AutoFecFollowsLoss) {
+    const AppSettings host_settings = make_settings("Host-FEC", root_ / L"host-recv-fec");
+    const AppSettings client_settings = make_settings("Cliente-FEC", root_ / L"client-recv-fec");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.set_auto_fec(true);
+    proto::StreamConfig cfg = make_config();
+    cfg.max_width = 1280;
+    cfg.max_height = 720;
+    cfg.fps = 60;
+    cfg.chroma_444 = false;
+    cfg.hdr = false;
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-FEC"), cfg);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.stream(); }, 5000)) << client.message();
+    EXPECT_EQ(client.current_fec(), 10) << "Arranca en 10 %";
+
+    // Consume cuadros y mide el mayor hueco entre cuadros completos.
+    std::uint64_t last_frame = 0;
+    std::uint64_t worst_gap = 0;
+    std::uint64_t next_key = 0;
+    auto pump = [&](int ms) {
+        const std::uint64_t until = gpu::now_us() + static_cast<std::uint64_t>(ms) * 1000;
+        while (gpu::now_us() < until) {
+            if (gpu::now_us() >= next_key) {  // Cuadros grandes de vez en cuando: más paquetes, las pérdidas se notan.
+                client.request_keyframe();
+                next_key = gpu::now_us() + 300'000;
+            }
+            WaitForSingleObject(client.frame_event(), 20);
+            for (auto& f : client.take_frames()) {
+                client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+                const std::uint64_t now = gpu::now_us();
+                if (last_frame != 0) worst_gap = std::max(worst_gap, now - last_frame);
+                last_frame = now;
+            }
+        }
+    };
+    pump(1500);
+    client.set_simulated_loss(5);
+    const std::uint64_t t0 = gpu::now_us();
+    while (client.current_fec() <= 10 && gpu::now_us() - t0 < 5'000'000) pump(100);
+    const int raised = client.current_fec();
+    std::printf("  Con 5 %% de pérdida simulada el FEC subió a %d %% en %.1f s\n", raised, static_cast<double>(gpu::now_us() - t0) / 1e6);
+    EXPECT_GE(raised, 20);
+    client.set_simulated_loss(0);
+    pump(1000);
+    worst_gap = 0;
+    const int before_down = client.current_fec();
+    pump(17000);  // 15 s sin pérdidas: baja un escalón.
+    std::printf("  Sin pérdidas: %d %% -> %d %%; mayor hueco entre cuadros %.0f ms\n", before_down, client.current_fec(),
+                static_cast<double>(worst_gap) / 1000.0);
+    EXPECT_LT(client.current_fec(), before_down) << "Sin pérdidas el FEC debe bajar";
+    EXPECT_LT(worst_gap, 300'000u) << "Cambiar el FEC no debe cortar la imagen";
+    client.disconnect();
+    host.stop();
+}

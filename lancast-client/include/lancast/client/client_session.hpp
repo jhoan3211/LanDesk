@@ -119,6 +119,10 @@ public:
     [[nodiscard]] std::optional<proto::StreamStarted> stream(int index = 0) const;
 
     void request_stream(const proto::StreamConfig& config);  // config.stream_index elige el stream.
+    // FEC automático: la paridad se ajusta según las pérdidas que ve el cliente (sin pérdidas baja hasta 5 %; con
+    // pérdidas sube enseguida, hasta 40 %). Cambiarla no reinicia el codificador ni corta la imagen.
+    void set_auto_fec(bool on) noexcept { auto_fec_ = on; }
+    [[nodiscard]] int current_fec() const noexcept { return fec_current_.load(); }
     void stop_second_stream();
     [[nodiscard]] std::optional<std::string> take_second_stream_error();
     void request_keyframe(int index = 0);
@@ -234,6 +238,13 @@ private:
     std::uint64_t fine_last_recovered_ = 0;
     std::uint64_t fine_last_lost_ = 0;
     std::uint64_t fine_last_idr_ = 0;
+    // FEC automático (protegido por mutex_, salvo los atómicos).
+    std::atomic<bool> auto_fec_{false};
+    std::atomic<int> fec_current_{10};
+    std::optional<proto::StreamConfig> last_config_;
+    std::optional<proto::StreamConfig> fec_pending_;  // Se envía fuera del candado.
+    std::uint64_t fec_clean_since_us_ = 0;
+    void auto_fec_tick(const NetSample& s, std::uint64_t now);
     void tick_history(std::uint64_t now);  // Con mutex_ tomado.
 
     void send_next_probe();

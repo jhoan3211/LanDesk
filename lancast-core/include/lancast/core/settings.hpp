@@ -42,6 +42,7 @@ struct StreamSettings {
     std::uint32_t audio_volume = 100;     // 0..100, se aplica en el cliente.
     std::uint32_t audio_buffer_ms = 20;   // Colchón de reproducción del cliente (menos = menor latencia).
     std::uint32_t fec_percent = 15;
+    bool fec_auto = true;  // La paridad se ajusta sola según las pérdidas (5 % por cable sin pérdidas).
     bool low_latency = true;  // Codificador en preset rápido y búfer de 1 frame (menos calidad por bit).
     // Recuperar pérdidas con intra-refresh en vez de keyframes. Apagado por defecto: medido con los
     // decodificadores de Windows, un keyframe recupera antes (descartan cuadros durante la ola de refresco).

@@ -111,6 +111,7 @@ void App::apply_stream_settings() {
     save_settings();
     followed_display_ = display_size();
     followed_hz_ = display_hz();
+    if (session_) session_->set_auto_fec(settings_.client.stream.fec_auto);
     if (session_ && session_->state() == client::State::Connected) session_->request_stream(make_stream_config());
 }
 
@@ -157,6 +158,7 @@ void App::start_connect(const std::string& address) {
         session_.reset();
         return;
     }
+    session_->set_auto_fec(settings_.client.stream.fec_auto);
     session_->connect(*ep, caps, make_stream_config());
     last_client_state_ = client::State::Connecting;
 

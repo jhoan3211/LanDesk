@@ -414,8 +414,18 @@ void App::draw_stream_settings(bool live) {
         ImGui::EndDisabled();
 
         row("FEC");
+        if (ImGui::Checkbox("Automático##fecauto", &s.fec_auto)) changed = true;
+        if (s.fec_auto && session_) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("ahora %d %%", session_->current_fec());
+        }
+        help("Automático: sin pérdidas baja hasta 5 % (por cable: menos paquetes y cuadros que salen antes); si aparecen "
+             "pérdidas (Wi-Fi) sube enseguida, hasta 40 %. Cambiarlo no corta la imagen.");
+        ImGui::BeginDisabled(s.fec_auto);
+        row("  Fijo");
         int fec = static_cast<int>(s.fec_percent);
         if (ImGui::SliderInt("##fec", &fec, 0, 50, "%d %%")) s.fec_percent = static_cast<std::uint32_t>(fec);
+        ImGui::EndDisabled();
         if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
         help("Paquetes de paridad Reed-Solomon: recuperan pérdidas sin esperar retransmisiones. 10–20% es lo recomendado.");
         ImGui::EndTable();
