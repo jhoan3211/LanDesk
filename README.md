@@ -119,6 +119,9 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 - **Ajuste automático**: si el codificador del host no da abasto (se salta más del 10 % de los cuadros o se le acumulan), baja la resolución (hasta 720p) y luego los FPS, y lo avisa. Nunca deja que se acumulen cuadros esperando (cada uno sumaría latencia).
 - **Multi-monitor**: lista de monitores del host con resolución, Hz y posición (incluidas coordenadas negativas); cambio en vivo y **dos monitores a la vez** en dos ventanas.
 - **Control remoto**: mouse absoluto o relativo, rueda, teclado por scancodes, cursor dibujado localmente (sin latencia) y modo solo ver.
+- **Espectadores**: mientras uno controla, hasta 4 equipos más pueden mirar (solo ver) el mismo stream; se codifica una sola vez.
+- **Micrófono del cliente** al host, con cancelación de eco: en el host aparece como micrófono si tiene el cable virtual gratuito VB-Cable.
+- **Mandos** de Xbox en el host (driver ViGEmBus 1.22.0) con **vibración** de vuelta al mando del cliente.
 - **Audio** del host (WASAPI loopback, PCM sin compresión: cero latencia de códec). Frecuencia elegible en vivo (la del sistema, 48 000, 44 100, 32 000, 24 000 o 16 000 Hz), estéreo o mono, volumen y búfer de reproducción (5–200 ms).
 - **Portapapeles** de texto bidireccional.
 - **Archivos**: arrastra archivos o carpetas a la ventana para enviarlos; desde el host, menú de la bandeja → *Enviar archivos al cliente*. Bloques de 4 MB, **reanudable**, verificado con SHA-256, con progreso, velocidad y tiempo restante. Nunca sobrescribe (guarda como `nombre (1).ext`) salvo que lo actives. Carpeta por defecto: `Descargas\LanCast`.
@@ -132,7 +135,8 @@ Las teclas especiales (Win, Alt+Tab, etc.) se envían al host mientras la ventan
 - **Intra-refresh** opcional: tras una pérdida, la imagen se repara en franjas en lugar de pedir un keyframe completo (apagado por defecto: algunos decodificadores de Windows no lo toleran).
 - **En paralelo**: la captura entrega cada frame al codificador y sigue con el siguiente; los frames codificados se recogen en otro hilo y un tercer hilo los paquetiza, cifra y envía en lote (UDP Send Offload: un solo llamado al sistema por cuadro). Hilos con prioridad de tiempo real (MMCSS) y GPU con prioridad alta.
 - Medido en loopback con una GPU integrada AMD (720p a 165 fps, HEVC, AMF directo): 165 fps sostenidos, ~5,7 ms de extremo a extremo (codificación 1,5–3 ms, red ~0,05 ms).
-- FEC al 15 % recupera sin cortes un 1 % de pérdida aleatoria (prueba automatizada).
+- FEC al 15 % recupera sin cortes un 1 % de pérdida aleatoria (prueba automatizada). En automático baja a 5 % por cable y sube sola con pérdidas.
+- **Decodificación rápida**: el cliente mantiene despierta la unidad de video de la GPU (a 1440p, HEVC pasa de ~10 a ~5 ms por cuadro en una AMD integrada).
 - Cambio de resolución, FPS, códec o monitor en ~130 ms sin reconectar; bitrate, FEC y audio sin reiniciar el video.
 
 ### Cómo conseguir la menor latencia
@@ -232,5 +236,6 @@ tests/              Unitarias (core), integración con el hardware (platform) y 
 
 ## Pendiente
 
-- Cliente web para el celular (HTTPS, video, táctil y archivos).
-- App Android para compartir la pantalla del celular hacia el PC (opcional).
+- Cliente desde el navegador (sin instalar nada).
+- 4:4:4 nativo en NVIDIA y codificador Intel directo (requieren ese hardware para probarlos).
+- Firma de código del .exe (evita el aviso de SmartScreen).
