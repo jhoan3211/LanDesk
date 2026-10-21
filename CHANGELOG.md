@@ -3,6 +3,19 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar; el de `LanCast.apk` ("SHA-256 de LanCast.apk: …") se agrega al subir el APK (la app lo exige para actualizarse).
 
+## 1.8.0
+
+### Controlar un teléfono (desde un PC o desde otro teléfono)
+- **Compartir este teléfono** (app Android, sección nueva en la pantalla principal): el teléfono pasa a ser un *host* como el PC. Otro teléfono o un PC con LanCast lo encuentran en *Equipos en la red*, se emparejan con el PIN que muestra el teléfono y lo ven y controlan.
+  - Imagen: captura de pantalla de Android directo al codificador por hardware (H.264 o HEVC, sin copias), en vertical u horizontal (si el teléfono gira, el stream se reacomoda solo). Audio de las apps en Android 10 o superior.
+  - Control: con el servicio de accesibilidad **«LanCast: control remoto»** (Android no permite tocar la pantalla de otra forma; se activa una vez en *Ajustes → Accesibilidad*). Clic = toque, mantener = toque largo, arrastrar = deslizar en vivo, rueda = desplazar, clic derecho = Atrás, botón del medio = Inicio. El teclado escribe en el campo de texto activo; Ctrl+A/C/V/X, flechas, Inicio/Fin, Borrar, Enter, Esc (= Atrás) y la tecla Windows (= Inicio).
+  - Lo que se copia en el PC pasa al portapapeles del teléfono.
+- **Cliente de PC con un teléfono**: manda el texto ya traducido con la distribución de teclado de Windows (ñ, tildes con tecla muerta, @ con AltGr) y dibuja un puntero sobre la pantalla del teléfono.
+- **Cliente Android con un teléfono**: usa el toque directo (se toca donde se quiere tocar en el otro teléfono).
+
+### Si el router cambia la IP (DHCP)
+- **Ya no hay que volver a escribir la IP ni el PIN.** El emparejamiento siempre fue por el identificador del equipo, no por la IP. Ahora, si un equipo emparejado no responde en su IP de siempre (se le da 1,5 s), el cliente lo busca en la red por ese identificador, se conecta en la IP nueva sin PIN y la guarda. En el PC y en el teléfono. Probado: ~3 s la primera vez después del cambio.
+
 ## 1.7.1
 
 - **App Android: botón *Buscar actualizaciones*** en los ajustes, además de la búsqueda automática al abrir la app (cada 6 horas como mucho). Si el teléfono no tiene la pantalla de *instalar apps desconocidas*, la app explica dónde activarlo.

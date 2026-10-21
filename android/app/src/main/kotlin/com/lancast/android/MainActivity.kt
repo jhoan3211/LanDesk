@@ -1,8 +1,14 @@
 package com.lancast.android
 
 import android.app.Activity
+import android.Manifest
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.pm.PackageManager
+import android.media.projection.MediaProjectionManager
+import android.net.Uri
+import android.os.Build
+import android.provider.Settings
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -34,6 +40,13 @@ class MainActivity : Activity() {
     private lateinit var scanStatus: TextView
     private lateinit var nameLabel: TextView
     private lateinit var updateBox: LinearLayout
+    private lateinit var shareStatus: TextView
+    private lateinit var shareButton: TextView
+    private lateinit var controlButton: TextView
+    private lateinit var clientsBox: LinearLayout
+    private var pinDialog: AlertDialog? = null
+    private var shownPin: String? = null
+    private val shareListener: (ShareService.State) -> Unit = { showShare(it) }
     private val ui = Handler(Looper.getMainLooper())
     @Volatile private var scanning = false
     @Volatile private var scanGeneration = 0
@@ -114,6 +127,8 @@ class MainActivity : Activity() {
         super.onResume()
         checkUpdate(manual = false)
         refreshPaired()
+        ShareService.addListener(shareListener)
+        refreshClients()
         scanning = true
         scanLoop()
     }
@@ -121,6 +136,117 @@ class MainActivity : Activity() {
     override fun onPause() {
         super.onPause()
         scanning = false
+        ShareService.removeListener(shareListener)
+    }
+
+    // ------------------------------------------------------------------------------------------- compartir este teléfono
+
+    private fun share() {
+        if (ShareService.current.sharing) {
+            ShareService.stop(this)
+            return
+        }
+        // Audio de las apps (Android 10+) y el aviso con el PIN; si se niegan, igual se comparte la imagen.
+        val wanted = buildList {
+            if (Build.VERSION.SDK_INT >= 29 && checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.RECORD_AUDIO)
+            }
+            if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+                add(Manifest.permission.POST_NOTIFICATIONS)
+            }
+        }
+        if (wanted.isNotEmpty()) {
+            requestPermissions(wanted.toTypedArray(), REQUEST_PERMISSIONS)
+            return
+        }
+        askCapture()
+    }
+
+    @Deprecated("API clásica de permisos: suficiente aquí")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        @Suppress("DEPRECATION")
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_PERMISSIONS) askCapture()
+    }
+
+    private fun askCapture() {
+        val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        @Suppress("DEPRECATION")
+        startActivityForResult(mpm.createScreenCaptureIntent(), REQUEST_CAPTURE)
+    }
+
+    @Deprecated("API de actividad clásica: suficiente aquí")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        @Suppress("DEPRECATION")
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_CAPTURE) return
+        if (resultCode != RESULT_OK || data == null) {
+            Toast.makeText(this, "Sin permiso de captura no se puede compartir la pantalla", Toast.LENGTH_LONG).show()
+            return
+        }
+        startForegroundService(Intent(this, ShareService::class.java)
+            .putExtra(ShareService.EXTRA_CODE, resultCode).putExtra(ShareService.EXTRA_DATA, data))
+        if (!ControlService.enabled()) Toast.makeText(this, "Para que te controlen, activa también el control remoto", Toast.LENGTH_LONG).show()
+    }
+
+    private fun showShare(s: ShareService.State) {
+        if (!::shareStatus.isInitialized) return
+        shareButton.text = if (s.sharing) "Dejar de compartir" else "Compartir pantalla"
+        shareButton.background = Ui.rounded(if (s.sharing) Ui.DANGER else Ui.ACCENT, dp(10).toFloat())
+        val ip = DeviceInfo.localIp()
+        shareStatus.text = when {
+            !s.sharing -> "Otro teléfono o un PC con LanCast podrán ver y controlar este teléfono." +
+                (if (s.detail.isNotEmpty()) "\n${s.detail}" else "")
+            s.client != null -> "${s.client} está viendo esta pantalla.\n${s.detail}"
+            else -> "Esperando conexión. En el otro equipo, búscalo en «Equipos en la red» o escribe ${ip ?: "la IP de este teléfono"}."
+        }
+        controlButton.text = if (ControlService.enabled()) "Control remoto: activado" else "Control remoto: desactivado (tocar para activar)"
+        if (s.pin != null && s.pin != shownPin) {
+            shownPin = s.pin
+            pinDialog?.dismiss()
+            pinDialog = AlertDialog.Builder(this).setTitle("PIN para ${s.pinFor}")
+                .setView(text(s.pin, 44f, Ui.TEXT, bold = true).apply {
+                    gravity = Gravity.CENTER
+                    setPadding(0, dp(16), 0, dp(16))
+                    letterSpacing = 0.15f
+                })
+                .setMessage("Escríbelo en el otro equipo para emparejarlo con este teléfono.")
+                .setPositiveButton("Cerrar", null).show()
+        } else if (s.pin == null) {
+            shownPin = null
+            pinDialog?.dismiss()
+            pinDialog = null
+            refreshClients()
+        }
+    }
+
+    // El control necesita el servicio de accesibilidad de LanCast (Android no deja tocar la pantalla de otra forma).
+    private fun enableControl() {
+        val restricted = if (Build.VERSION.SDK_INT >= 33) "\n\nSi Android dice que es un «ajuste restringido»: abre «Info de la app» → menú ⋮ " +
+            "→ «Permitir ajustes restringidos» y vuelve a intentarlo (pasa con apps instaladas fuera de la tienda)." else ""
+        AlertDialog.Builder(this).setTitle("Control remoto")
+            .setMessage("Para que otro equipo pueda tocar y escribir en este teléfono, activa «LanCast: control remoto» en " +
+                "Ajustes → Accesibilidad → Apps instaladas. Solo actúa mientras compartes la pantalla y con equipos emparejados con el PIN." +
+                restricted)
+            .setPositiveButton("Abrir Accesibilidad") { _, _ -> startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
+            .setNeutralButton("Info de la app") { _, _ ->
+                startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+            }
+            .setNegativeButton("Cancelar", null).show()
+    }
+
+    private fun refreshClients() {
+        if (!::clientsBox.isInitialized) return
+        clientsBox.removeAllViews()
+        for (c in storage.clients()) {
+            clientsBox.addView(card(c.name, c.address + " · puede conectarse sin PIN", "Olvidar", {
+                AlertDialog.Builder(this).setMessage("¿Olvidar ${c.name}? La próxima vez tendrá que escribir el PIN.")
+                    .setPositiveButton("Olvidar") { _, _ ->
+                        storage.forgetClient(c.id)
+                        refreshClients()
+                    }.setNegativeButton("Cancelar", null).show()
+            }, null))
+        }
     }
 
     private fun build(): View {
@@ -166,6 +292,20 @@ class MainActivity : Activity() {
         col.addView(section("Equipos emparejados"))
         pairedBox = column()
         col.addView(pairedBox)
+
+        col.addView(section("Compartir este teléfono"))
+        shareStatus = text("", 13f, Ui.MUTED)
+        col.addView(shareStatus)
+        val shareRow = row().apply { setPadding(0, dp(8), 0, dp(4)) }
+        shareButton = button("Compartir pantalla", primary = true) { share() }
+        shareRow.addView(shareButton, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+            marginEnd = dp(8)
+        })
+        col.addView(shareRow)
+        controlButton = button("Control remoto") { enableControl() }.apply { textSize = 13f }
+        col.addView(controlButton)
+        clientsBox = column()
+        col.addView(clientsBox)
 
         col.addView(section("Ajustes"))
         col.addView(option("Resolución", listOf("screen" to "Igual a esta pantalla", "720" to "720p", "1080" to "1080p", "1440" to "1440p"),
@@ -335,5 +475,10 @@ class MainActivity : Activity() {
                 storage.deviceName = input.text.toString()
                 updateName()
             }.setNegativeButton("Cancelar", null).show()
+    }
+
+    companion object {
+        private const val REQUEST_CAPTURE = 21
+        private const val REQUEST_PERMISSIONS = 22
     }
 }

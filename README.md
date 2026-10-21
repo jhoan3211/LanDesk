@@ -51,6 +51,18 @@ Además:
 - **Gráficos** en tiempo real (latencia, decodificación, bitrate, FPS y pérdidas).
 - **Despertar un PC** apagado o suspendido: *Equipos emparejados* → ⋯ → *Despertar* (Wake-on-LAN activado en la BIOS y en la tarjeta de red del PC).
 
+### Controlar un teléfono (desde un PC o desde otro teléfono)
+
+En el teléfono que quieres controlar, abre LanCast → **Compartir este teléfono**:
+
+1. Toca **Compartir pantalla** y acepta el aviso de Android (*Iniciar grabación o transmisión* → pantalla completa). Si te pide permiso para el audio y las notificaciones, acéptalos (el audio de las apps llega en Android 10 o superior).
+2. Para que te puedan tocar y escribir, toca **Control remoto** y activa **«LanCast: control remoto»** en *Ajustes → Accesibilidad → Apps instaladas* (solo la primera vez). Si Android dice que es un *ajuste restringido*: *Info de la app* → menú ⋮ → *Permitir ajustes restringidos*, y vuelve a intentarlo.
+3. En el otro equipo (PC o teléfono) el teléfono aparece en **Equipos en la red**. La primera vez se escribe el **PIN** que muestra el teléfono.
+
+Con el mouse del PC: clic = toque, mantener = toque largo, arrastrar = deslizar, rueda = desplazar, clic derecho = Atrás, botón del medio = Inicio. El teclado escribe en el campo de texto activo (con la distribución del PC: ñ, tildes, @), y funcionan Ctrl+A/C/V/X, flechas, Borrar, Enter, Esc (= Atrás) y la tecla Windows (= Inicio). Desde otro teléfono se toca directamente donde se quiere tocar.
+
+**Si el router cambia la IP de un equipo (DHCP)** no hace falta volver a escribir la IP ni el PIN: si el equipo emparejado no responde en su IP de siempre, LanCast lo busca en la red por su identificador y se conecta en la nueva. Para que la IP no cambie nunca, se puede reservar en el router (*reserva DHCP* por MAC).
+
 ## Primer uso: conectar un PC a otro
 
 En el **PC que vas a controlar** (host), por ejemplo `192.168.40.7`:

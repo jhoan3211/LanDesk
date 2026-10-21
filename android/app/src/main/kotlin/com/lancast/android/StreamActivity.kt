@@ -46,6 +46,7 @@ import com.lancast.core.FileProgress
 import com.lancast.core.FileTransfer
 import com.lancast.core.MouseButtonId
 import com.lancast.core.HostInfo
+import com.lancast.core.HostServer
 import com.lancast.core.Messages
 import com.lancast.core.Session
 import com.lancast.core.SessionListener
@@ -200,7 +201,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             return
         }
         val caps = ClientCaps(storage.deviceName, decoders, display.width, display.height, hz)
-        val s = Session(storage.deviceId, storage.deviceName, storage, this)
+        val s = Session(storage.deviceId, storage.deviceName, storage, this) { DeviceInfo.broadcastAddresses() }
         session = s
         setStatus(if (connectedOnce) "Reconectando…" else "Conectando a $address…")
         s.connect(address, port, caps, streamConfig())
@@ -255,12 +256,22 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     override fun onConnected(hostName: String) = ui.post {
         connectedOnce = true
         reconnectUntil = 0
-        storage.addRecent(address)
+        // Si el equipo cambió de IP (DHCP), se guarda la nueva.
+        val real = session?.hostAddress?.hostAddress
+        if (real != null && real != address && storage.recent.contains(address)) storage.recent = storage.recent.map { if (it == address) real else it }
+        storage.addRecent(real ?: address)
         setStatus("Conectado a $hostName · esperando video…")
     }.let {}
 
     override fun onHostInfo(info: HostInfo) = ui.post {
-        if (!info.inputAllowed) Toast.makeText(this, "${info.hostName} no permite el control: solo ver", Toast.LENGTH_LONG).show()
+        if (!info.inputAllowed) {
+            val why = if (info.platform == HostServer.PLATFORM_ANDROID) "no activó el control remoto (Accesibilidad)" else "no permite el control"
+            Toast.makeText(this, "${info.hostName} $why: solo ver", Toast.LENGTH_LONG).show()
+        }
+        if (info.platform == HostServer.PLATFORM_ANDROID && touch.touchpad) {
+            touch.touchpad = false
+            Toast.makeText(this, "Es un teléfono: toca donde quieras tocar en él", Toast.LENGTH_SHORT).show()
+        }
         if (info.hasMac) {
             storage.saveMac(address, info.mac)
             session?.hostAddress?.hostAddress?.let { storage.saveMac(it, info.mac) }

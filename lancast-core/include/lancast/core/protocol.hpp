@@ -146,6 +146,9 @@ struct RemoteMonitor {
     bool hdr = false;
 };
 
+inline constexpr std::uint8_t kPlatformWindows = 0;
+inline constexpr std::uint8_t kPlatformAndroid = 1;  // Teléfono compartiendo su pantalla (control por accesibilidad).
+
 struct HostInfo {
     std::string host_name;
     std::vector<RemoteMonitor> monitors;
@@ -159,6 +162,7 @@ struct HostInfo {
     bool secure_desktop = false;  // Opcional (1.3+): host como servicio (bloqueo, UAC, Ctrl+Alt+Supr).
     std::array<std::uint8_t, 6> mac{};  // Opcional (1.7+): MAC del adaptador de la LAN (Wake-on-LAN); ceros = no se sabe.
     bool gamepad_available = false;     // Opcional (1.7+): el host puede crear mandos virtuales (driver ViGEmBus).
+    std::uint8_t platform = kPlatformWindows;  // Opcional (1.8+): el host es un PC o un teléfono Android.
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };

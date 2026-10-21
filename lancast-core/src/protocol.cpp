@@ -125,6 +125,7 @@ void HostInfo::write(ByteWriter& w) const {
     w.u16(media_port).u16(file_port);
     w.boolean(secure_desktop);
     w.raw(mac).boolean(gamepad_available);
+    w.u8(platform);
 }
 
 std::optional<HostInfo> HostInfo::read(ByteReader& r) {
@@ -153,6 +154,7 @@ std::optional<HostInfo> HostInfo::read(ByteReader& r) {
         h.mac = r.fixed<6>();
         h.gamepad_available = r.boolean();
     }
+    if (r.remaining() >= 1) h.platform = r.u8();
     return finish(r, std::move(h));
 }
 

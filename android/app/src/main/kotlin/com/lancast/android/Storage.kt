@@ -8,6 +8,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
 import com.lancast.core.Crypto
+import com.lancast.core.HostPairingStore
 import com.lancast.core.PairingStore
 import com.lancast.core.toHex
 import java.security.KeyStore
@@ -21,6 +22,7 @@ import javax.crypto.spec.GCMParameterSpec
 class Storage(context: Context) : PairingStore {
     private val prefs: SharedPreferences = context.getSharedPreferences("lancast", Context.MODE_PRIVATE)
     private val pairings: SharedPreferences = context.getSharedPreferences("pairings", Context.MODE_PRIVATE)
+    private val clients: SharedPreferences = context.getSharedPreferences("host_clients", Context.MODE_PRIVATE)
     private val appContext = context.applicationContext
 
     val deviceId: ByteArray
@@ -135,6 +137,45 @@ class Storage(context: Context) : PairingStore {
 
     override fun forget(hostId: String) {
         pairings.edit().remove("$hostId.secret").remove("$hostId.name").remove("$hostId.address").apply()
+    }
+
+    override fun hostIdAt(address: String): String? = paired().firstOrNull { it.address == address }?.id
+
+    override fun updateAddress(hostId: String, address: String) {
+        if (address.isNotEmpty() && pairings.contains("$hostId.name")) pairings.edit().putString("$hostId.address", address).apply()
+    }
+
+    private fun encrypt(secret: ByteArray): String {
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.ENCRYPT_MODE, key())
+        return Base64.encodeToString(cipher.iv + cipher.doFinal(secret), Base64.NO_WRAP)
+    }
+
+    private fun decrypt(blob: String): ByteArray? = try {
+        val raw = Base64.decode(blob, Base64.NO_WRAP)
+        val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+        cipher.init(Cipher.DECRYPT_MODE, key(), GCMParameterSpec(128, raw.copyOfRange(0, 12)))
+        cipher.doFinal(raw, 12, raw.size - 12)
+    } catch (_: Exception) {
+        null
+    }
+
+    // Equipos que pueden controlar este teléfono (los que escribieron el PIN).
+    data class Client(val id: String, val name: String, val address: String)
+
+    fun clients(): List<Client> = clients.all.keys.filter { it.endsWith(".name") }.map { key ->
+        val id = key.removeSuffix(".name")
+        Client(id, clients.getString("$id.name", "") ?: "", clients.getString("$id.address", "") ?: "")
+    }
+
+    fun forgetClient(id: String) = clients.edit().remove("$id.secret").remove("$id.name").remove("$id.address").apply()
+
+    fun hostClients() = object : HostPairingStore {
+        override fun clientSecret(clientId: String) = clients.getString("$clientId.secret", null)?.let { decrypt(it) }
+        override fun saveClient(clientId: String, name: String, address: String, secret: ByteArray) {
+            clients.edit().putString("$clientId.secret", encrypt(secret)).putString("$clientId.name", name)
+                .putString("$clientId.address", address).apply()
+        }
     }
 
     private fun key(): SecretKey {

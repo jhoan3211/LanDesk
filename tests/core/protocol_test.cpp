@@ -189,7 +189,7 @@ TEST(Protocol, HostInfoSecureDesktopIsOptional) {
     ByteWriter w;
     h.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 1 - 7);  // Sin secure_desktop (1.3) ni MAC/mando (1.7).
+    old_bytes.resize(old_bytes.size() - 1 - 7 - 1);  // Sin secure_desktop (1.3), MAC/mando (1.7) ni plataforma (1.8).
     ByteReader r(old_bytes);
     const auto out = HostInfo::read(r);
     ASSERT_TRUE(out.has_value());
@@ -307,7 +307,7 @@ TEST(Protocol, GamepadAndWakeOnLanFields) {
     ByteWriter hw;
     h.write(hw);
     std::vector<std::uint8_t> old = hw.take();
-    old.resize(old.size() - 7);
+    old.resize(old.size() - 7 - 1);  // Sin MAC/mando (1.7) ni plataforma (1.8).
     ByteReader hr(old);
     const auto ho = HostInfo::read(hr);
     ASSERT_TRUE(ho.has_value());

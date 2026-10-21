@@ -382,8 +382,37 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
     return true;
 }
 
+// Equipo emparejado cuya IP era `host` (la última con la que se conectó). Vacío si no se conoce.
+static std::string paired_id_at(const net::Endpoint& host) {
+    for (const auto& d : sys::load_paired()) {
+        if (d.role != "host") continue;
+        const auto ep = net::Endpoint::parse(d.last_address, host.port);
+        if (ep && ep->ip == host.ip) return d.id_hex;
+    }
+    return {};
+}
+
+// El router (DHCP) le dio otra IP a un equipo emparejado: se lo busca en la red por su id, que no cambia.
+static std::optional<net::Endpoint> find_moved_host(const std::string& id_hex) {
+    for (int attempt = 0; attempt < 2; ++attempt) {
+        for (const auto& h : discover_hosts(1200)) {
+            if (h.id_hex == id_hex) return h.endpoint;
+        }
+    }
+    return std::nullopt;
+}
+
 void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, proto::StreamConfig initial) {
-    auto stream = net::TcpStream::connect(host, 4000);
+    // A un equipo emparejado se le da poco tiempo en su IP de siempre: en la LAN responde en milisegundos.
+    const std::string paired_id = paired_id_at(host);
+    auto stream = net::TcpStream::connect(host, paired_id.empty() ? 4000 : 1500);
+    if (!stream && !paired_id.empty() && !stopping_) {
+        if (const auto moved = find_moved_host(paired_id); moved && !(*moved == host)) {
+            log::info("El equipo emparejado cambió de IP: {} -> {}", host.to_string(), moved->to_string());
+            host = *moved;
+            stream = net::TcpStream::connect(host, 4000);
+        }
+    }
     if (!stream) {
         fail(std::format("No se pudo conectar a {}: {}", host.to_string(), stream.error().message()), true);
         return;

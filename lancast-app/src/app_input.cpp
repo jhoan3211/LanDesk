@@ -99,6 +99,38 @@ bool App::keyboard_hook(WPARAM wp, const KBDLLHOOKSTRUCT& k) {
     }
     if (!control_enabled() || show_menu_ || pin_modal_open_) return false;
     if ((k.flags & LLKHF_INJECTED) != 0) return false;  // Evita bucles si host y cliente están en el mismo equipo.
+    // Host en un teléfono: Android no tiene la distribución de teclado de este PC, así que los caracteres se mandan
+    // ya traducidos (ñ, tildes con tecla muerta, @ con AltGr). Atajos con Ctrl y teclas como Enter o flechas siguen
+    // como teclas.
+    if (const auto info = session_->host_info(); info && info->platform == proto::kPlatformAndroid) {
+        const bool modifier = k.vkCode == VK_SHIFT || k.vkCode == VK_LSHIFT || k.vkCode == VK_RSHIFT || k.vkCode == VK_CONTROL ||
+                              k.vkCode == VK_LCONTROL || k.vkCode == VK_RCONTROL || k.vkCode == VK_MENU || k.vkCode == VK_LMENU ||
+                              k.vkCode == VK_RMENU || k.vkCode == VK_CAPITAL;
+        const bool shortcut = ctrl && !alt;  // AltGr = Ctrl+Alt: esos sí son caracteres.
+        if (!modifier && !shortcut) {
+            if (!down) {
+                if (typed_keys_.erase(k.vkCode) > 0) return true;  // Su carácter ya se mandó al apretarla.
+            } else {
+                BYTE state[256]{};
+                if (shift) state[VK_SHIFT] = 0x80;
+                if (ctrl) state[VK_CONTROL] = 0x80;
+                if (alt) state[VK_MENU] = 0x80;
+                if ((GetKeyState(VK_CAPITAL) & 1) != 0) state[VK_CAPITAL] = 0x01;
+                wchar_t chars[8]{};
+                const HKL layout = GetKeyboardLayout(GetWindowThreadProcessId(fg, nullptr));
+                const int n = ToUnicodeEx(k.vkCode, k.scanCode, state, chars, 8, 0, layout);
+                if (n < 0) {  // Tecla muerta (tilde, diéresis): el carácter sale con la siguiente.
+                    typed_keys_.insert(k.vkCode);
+                    return true;
+                }
+                if (n > 0 && chars[0] >= 0x20 && chars[0] != 0x7F) {
+                    typed_keys_.insert(k.vkCode);
+                    session_->send_message(proto::encode(proto::MsgType::Text, proto::TextMessage{detail::narrow(std::wstring(chars, n))}));
+                    return true;
+                }
+            }
+        }
+    }
     session_->send_message(proto::encode(proto::MsgType::Key, proto::Key{static_cast<std::uint16_t>(k.scanCode),
                                                                          (k.flags & LLKHF_EXTENDED) != 0, down}));
     return true;

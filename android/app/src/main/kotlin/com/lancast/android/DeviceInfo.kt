@@ -45,6 +45,14 @@ object DeviceInfo {
         return Size(maxOf(w, h), minOf(w, h)) to Math.round(hz).coerceIn(30, 240)
     }
 
+    fun localIp(): String? = try {
+        NetworkInterface.getNetworkInterfaces().toList().filter { it.isUp && !it.isLoopback }
+            .flatMap { it.inetAddresses.toList() }
+            .firstOrNull { it is java.net.Inet4Address && it.isSiteLocalAddress }?.hostAddress
+    } catch (_: Exception) {
+        null
+    }
+
     // Direcciones de broadcast de las redes del teléfono (para encontrar los PC).
     fun broadcastAddresses(): List<InetAddress> {
         val out = ArrayList<InetAddress>()

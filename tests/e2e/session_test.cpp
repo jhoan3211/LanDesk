@@ -390,3 +390,54 @@ TEST_F(EndToEnd, PairStreamTransferAndReconnect) {
 
     host.stop();
 }
+
+// El router (DHCP) le cambió la IP al host: el cliente lo encuentra por su id en la red y entra sin PIN.
+TEST_F(EndToEnd, ReconnectsWhenHostIpChanged) {
+    const AppSettings host_settings = make_settings("Host-IP", root_ / L"host-recv-ip");
+    const AppSettings client_settings = make_settings("Cliente-IP", root_ / L"client-recv-ip");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    // Si otra copia de LanCast ocupa el puerto de descubrimiento, este host no lo recibe: no se puede probar.
+    bool visible = false;
+    for (int i = 0; i < 3 && !visible; ++i) {
+        for (const auto& h : client::discover_hosts(800)) visible = visible || h.id_hex == host_settings.device_id;
+    }
+    if (!visible) {
+        host.stop();
+        GTEST_SKIP() << "El descubrimiento no llega a este host de prueba (¿LanCast abierto en este PC?)";
+    }
+
+    {
+        client::ClientSession first(client_settings);
+        first.connect({0x7F000001, kPort}, make_caps("Cliente-IP"), make_config());
+        ASSERT_TRUE(wait_for([&] { return first.state() == client::State::NeedPin; }, 5000)) << first.message();
+        ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+        first.submit_pin(*host.status().pin);
+        ASSERT_TRUE(wait_for([&] { return first.state() == client::State::Connected; }, 5000)) << first.message();
+        first.disconnect();
+    }
+    ASSERT_TRUE(wait_for([&] { return !host.status().session_active; }, 5000));
+
+    // La IP guardada deja de existir (192.0.2.x es una red de documentación: nadie responde).
+    auto paired = sys::load_paired();
+    for (auto& d : paired) {
+        if (d.role == "host" && d.id_hex == host_settings.device_id) d.last_address = "192.0.2.123:" + std::to_string(kPort);
+    }
+    sys::save_paired(paired);
+
+    const std::uint64_t t0 = gpu::now_us();
+    client::ClientSession again(client_settings);
+    again.connect({0xC000027B, kPort}, make_caps("Cliente-IP"), make_config());
+    ASSERT_TRUE(wait_for([&] { return again.state() == client::State::Connected || again.state() == client::State::NeedPin ||
+                                      again.state() == client::State::Failed; }, 15000));
+    EXPECT_EQ(again.state(), client::State::Connected) << "Debe entrar sin PIN en la IP nueva: " << again.message();
+    std::printf("  IP cambiada: encontrado por su id y conectado sin PIN en %.1f s\n", static_cast<double>(gpu::now_us() - t0) / 1e6);
+    bool updated = false;
+    for (const auto& d : sys::load_paired()) {
+        if (d.role == "host" && d.id_hex == host_settings.device_id) updated = d.last_address.rfind("192.0.2.", 0) != 0;
+    }
+    EXPECT_TRUE(updated) << "Debe guardar la IP nueva";
+    again.disconnect();
+    host.stop();
+}
