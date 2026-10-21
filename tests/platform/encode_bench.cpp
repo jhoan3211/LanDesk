@@ -218,3 +218,83 @@ TEST(Bench, EncodeLatency) {
     }
     timeEndPeriod(1);
 }
+
+// Desglose de la latencia del host por etapa (LANCAST_BENCH=1): conversión de color en la GPU y codificación, para
+// 4:2:0 y 4:4:4 empaquetado (W×2H) a 1080p y 1440p, desde una captura de 2560x1440 con contenido en movimiento.
+TEST(Bench, HostLatencyBreakdown) {
+    if (!bench_enabled()) GTEST_SKIP() << "Define LANCAST_BENCH=1 para medir";
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    mf::MfScope mf;
+    timeBeginPeriod(1);
+    auto dev = gpu::create_device(std::nullopt);
+    ASSERT_TRUE(dev.has_value());
+    const Size cap{2560, 1440};
+    // Dos "capturas" distintas alternadas: el codificador siempre ve cambios.
+    std::array<gpu::ComPtr<ID3D11Texture2D>, 2> captures{make_desktop(*dev, cap), make_desktop(*dev, Size{cap.width, cap.height})};
+    {
+        // La segunda, con el contenido corrido (otra semilla de "texto").
+        D3D11_BOX box{0, 0, 0, cap.width - 64, cap.height, 1};
+        auto big = make_desktop(*dev, Size{cap.width + 64, cap.height});
+        dev->context->CopySubresourceRegion(captures[1].Get(), 0, 0, 0, 0, big.Get(), 0, &box);
+    }
+    std::printf("\n  %-14s %-11s | conversión GPU | codificación (mediana / p95) | KB/cuadro\n", "modo", "codificado");
+    struct Mode {
+        const char* name;
+        Size out;
+        bool c444;
+        std::uint32_t mbps;
+    };
+    for (const Mode m : {Mode{"1080p 4:2:0", {1920, 1080}, false, 50}, Mode{"1440p 4:2:0", {2560, 1440}, false, 127},
+                         Mode{"1080p 4:4:4", {1920, 1080}, true, 100}, Mode{"1440p 4:4:4", {2560, 1440}, true, 137}}) {
+        auto packer = gpu::YuvPacker::create(*dev, gpu::PackConfig{cap, DXGI_FORMAT_B8G8R8A8_UNORM, m.out, m.c444, false});
+        ASSERT_TRUE(packer.has_value());
+        const Size coded = (*packer)->coded_size();
+        std::array<gpu::ComPtr<ID3D11Texture2D>, 5> pool;
+        for (auto& t : pool) {
+            t = *gpu::create_texture(dev->device.Get(), coded.width, coded.height, DXGI_FORMAT_NV12,
+                                     D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+        }
+        std::vector<double> conv;
+        for (int i = 0; i < 40; ++i) {
+            const double ms = gpu_ms(*dev, [&] { (*packer)->process(captures[static_cast<std::size_t>(i) % 2].Get(), pool[0].Get()); });
+            if (ms >= 0) conv.push_back(ms);
+        }
+        mf::EncoderConfig ec{Codec::Hevc, coded, 60, m.mbps * 1000, RateControl::Cbr, true};
+        auto enc = mf::create_encoder(*dev, ec);
+        ASSERT_TRUE(enc.has_value()) << enc.error().message();
+        std::mutex mu;
+        std::map<std::uint64_t, std::uint64_t> sent;
+        std::vector<double> latency;
+        std::uint64_t bytes = 0;
+        int frames = 0;
+        (*enc)->set_output_callback([&](mf::EncodedPacket&& p) {
+            const std::uint64_t now = gpu::now_us();
+            std::scoped_lock lock(mu);
+            bytes += p.data.size();
+            ++frames;
+            if (const auto it = sent.find(p.timestamp_us); it != sent.end() && p.timestamp_us > 30) {
+                latency.push_back(static_cast<double>(now - it->second) / 1000.0);
+            }
+        });
+        const std::uint64_t interval = 1'000'000 / 60;
+        std::uint64_t next = gpu::now_us();
+        for (int i = 0; i < 180; ++i) {
+            while (gpu::now_us() < next) Sleep(0);
+            next += interval;
+            ID3D11Texture2D* target = pool[static_cast<std::size_t>(i) % pool.size()].Get();
+            (*packer)->process(captures[static_cast<std::size_t>(i) % 2].Get(), target);
+            const std::uint64_t ts = static_cast<std::uint64_t>(i + 1) * interval;
+            {
+                std::scoped_lock lock(mu);
+                sent[ts] = gpu::now_us();
+            }
+            ASSERT_TRUE((*enc)->submit(target, ts, i == 0).has_value());
+        }
+        Sleep(200);
+        std::scoped_lock lock(mu);
+        std::printf("  %-14s %-11s | %6.2f ms      | %6.2f / %6.2f ms             | %6.0f\n", m.name,
+                    std::format("{}x{}", coded.width, coded.height).c_str(), percentile(conv, 0.5), percentile(latency, 0.5),
+                    percentile(latency, 0.95), frames > 0 ? static_cast<double>(bytes) / frames / 1024.0 : 0.0);
+    }
+    timeEndPeriod(1);
+}

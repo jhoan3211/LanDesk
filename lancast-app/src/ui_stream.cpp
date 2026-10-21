@@ -263,6 +263,10 @@ void App::draw_stream_toolbar() {
     place(button_w("Latencia mínima"));
     if (primary_button("Latencia mínima")) apply_min_latency();
     ImGui::SetItemTooltip("FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa");
+    place(button_w("Calidad máxima"));
+    if (primary_button("Calidad máxima")) apply_max_quality();
+    ImGui::SetItemTooltip("Resolución nativa del host (sin escalar) y 50 %% más bitrate, con el codificador rápido: la imagen "
+                          "mejora y la latencia sube muy poco (~2 ms en una GPU integrada)");
     place(button_w(show_stats_ ? "Ocultar estadísticas" : "Estadísticas"));
     if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) {
         show_stats_ = !show_stats_;

@@ -13,6 +13,7 @@
 #include "imgui.h"
 #include "imgui_impl_dx11.h"
 #include "imgui_impl_win32.h"
+#include "lancast/core/bitrate.hpp"
 #include "lancast/core/geometry.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/platform/crash.hpp"
@@ -587,6 +588,54 @@ void App::apply_min_latency() {
     apply_stream_settings();
     if (!fullscreen_ && streaming()) toggle_fullscreen();  // Pantalla completa = presentación directa.
     toast(std::format("Latencia mínima: {} fps, V-Sync apagado, codificador rápido, pantalla completa", s.fps));
+}
+
+// La mejor imagen sin que la latencia suba de verdad: resolución nativa del host (sin escalar), 50 % más bitrate que
+// el automático y el codificador rápido (sin cuadros de más en espera). Medido en una GPU AMD integrada: +2 ms por
+// cuadro en el host frente a 1080p. El 4:4:4 no se activa: costaba +3 a +7 ms más (queda como opción aparte para texto).
+// El ajuste automático baja los FPS si el host no da abasto.
+void App::apply_max_quality() {
+    StreamSettings& s = settings_.client.stream;
+    std::uint32_t w = 0;
+    std::uint32_t h = 0;
+    if (session_) {
+        if (const auto info = session_->host_info()) {
+            // Tamaño real del monitor que se ve (o de todos juntos).
+            std::int32_t x0 = INT32_MAX, y0 = INT32_MAX, x1 = INT32_MIN, y1 = INT32_MIN;
+            for (const auto& m : info->monitors) {
+                if (s.monitor_id != 0 && m.id != s.monitor_id) continue;
+                x0 = std::min(x0, m.rect.x);
+                y0 = std::min(y0, m.rect.y);
+                x1 = std::max(x1, m.rect.x + m.rect.width);
+                y1 = std::max(y1, m.rect.y + m.rect.height);
+            }
+            if (x1 > x0 && y1 > y0) {
+                w = static_cast<std::uint32_t>(x1 - x0);
+                h = static_cast<std::uint32_t>(y1 - y0);
+            }
+        }
+    }
+    if (w != 0 && h != 0) {
+        s.resolution = ResolutionPreset::Custom;
+        s.custom_width = w & ~1u;
+        s.custom_height = h & ~1u;
+    } else {
+        const Size here = display_size();
+        w = here.width;
+        h = here.height;
+    }
+    s.chroma_444 = false;
+    s.codec = CodecChoice::Auto;
+    s.low_latency = true;
+    s.rate_control = RateControl::Cbr;  // Bitrate parejo: sin ráfagas que retrasen cuadros.
+    s.adaptive = true;
+    const std::uint32_t fps = s.fps_match_display ? std::max<std::uint32_t>(display_hz(), 30) : std::max<std::uint32_t>(s.fps, 30);
+    s.auto_bitrate = false;
+    s.bitrate_mbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(w, h, fps, Codec::Hevc) * 3 / 2, 40, 400);
+    settings_.client.active_profile.clear();
+    apply_stream_settings();
+    toast(std::format("Calidad máxima: {}x{} nativa, {} Mbps, codificador rápido. Para texto aún más nítido: 4:4:4 en Más opciones",
+                      w, h, s.bitrate_mbps));
 }
 
 void App::save_settings() {

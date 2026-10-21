@@ -10,6 +10,7 @@
 #include <random>
 
 #include "lancast/client/client_session.hpp"
+#include "lancast/core/bitrate.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/host/host_service.hpp"
@@ -439,5 +440,80 @@ TEST_F(EndToEnd, ReconnectsWhenHostIpChanged) {
     }
     EXPECT_TRUE(updated) << "Debe guardar la IP nueva";
     again.disconnect();
+    host.stop();
+}
+
+// Calidad máxima (resolución nativa, 50 % más bitrate, codificador rápido) frente a lo normal: cuánto cambia la
+// latencia del host y de la red. Solo informa (depende del codificador del equipo).
+TEST_F(EndToEnd, QualityPresetLatency) {
+    const AppSettings host_settings = make_settings("Host-Calidad", root_ / L"host-recv-q");
+    const AppSettings client_settings = make_settings("Cliente-Calidad", root_ / L"client-recv-q");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Calidad"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    const auto info = *client.host_info();
+    const auto& mon = info.monitors.front();
+
+    auto measure = [&](const char* label, proto::StreamConfig cfg) {
+        client.request_stream(cfg);
+        Sleep(800);
+        const std::uint64_t start = gpu::now_us();
+        std::uint64_t next_key = start;
+        while (gpu::now_us() < start + 2'500'000) {
+            if (gpu::now_us() >= next_key) {  // Cuadros completos de vez en cuando (el escritorio quieto da cuadros mínimos).
+                client.request_keyframe();
+                next_key += 250'000;
+            }
+            WaitForSingleObject(client.frame_event(), 20);
+            for (auto& f : client.take_frames()) client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+        }
+        double enc = 0, net = 0, big_net = 0;
+        int n = 0, big = 0;
+        for (const auto& fs : client.frame_history()) {
+            if (fs.time_us < start) continue;
+            enc += fs.encode_ms;
+            net += fs.network_ms;
+            ++n;
+            if (fs.keyframe) {
+                big_net += fs.network_ms;
+                ++big;
+            }
+        }
+        const auto st = client.stream();
+        std::printf("  %-16s %ux%u%s %s %u Mbps · host %.2f ms · red %.2f ms (keyframes %.2f ms) · %d cuadros\n", label,
+                    st ? st->width : 0, st ? st->height : 0, st && st->chroma_444 ? " 4:4:4" : "", st ? std::string{to_string(st->codec)}.c_str() : "",
+                    st ? st->bitrate_kbps / 1000 : 0, n ? enc / n : 0.0, n ? net / n : 0.0, big ? big_net / big : 0.0, n);
+        return n ? enc / n : 0.0;
+    };
+
+    proto::StreamConfig normal = make_config();
+    normal.monitor_id = mon.id;
+    normal.max_width = 1920;
+    normal.max_height = 1080;
+    normal.fps = 60;
+    normal.chroma_444 = false;
+    normal.hdr = false;
+    normal.auto_bitrate = true;
+    proto::StreamConfig quality = normal;
+    quality.max_width = static_cast<std::uint32_t>(mon.rect.width);
+    quality.max_height = static_cast<std::uint32_t>(mon.rect.height);
+    quality.chroma_444 = false;
+    quality.auto_bitrate = false;
+    quality.bitrate_kbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(quality.max_width, quality.max_height, 60, Codec::Hevc) * 3 / 2, 40, 400) * 1000;
+    const double a = measure("Normal", normal);
+    const double b = measure("Calidad máxima", quality);
+    proto::StreamConfig with444 = quality;
+    with444.chroma_444 = true;
+    with444.bitrate_kbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(quality.max_width, quality.max_height * 2, 60, Codec::Hevc), 50, 400) * 1000;
+    measure("+ 4:4:4", with444);
+    std::printf("  Diferencia en el host: %+.2f ms por cuadro\n", b - a);
+    EXPECT_GT(b, 0.0);
+    client.disconnect();
     host.stop();
 }

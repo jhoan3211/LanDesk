@@ -376,6 +376,11 @@ void App::draw_stream_settings(bool live) {
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();
+            ImGui::SameLine();
+            if (primary_button("Aplicar calidad máxima")) apply_max_quality();
+            help("Calidad máxima: resolución nativa del host (sin escalar) y 50 % más bitrate, con el codificador rápido "
+                 "(sube ~2 ms en una GPU integrada). El 4:4:4 da texto aún más nítido pero cuesta más (+3 a +7 ms medidos en "
+                 "una GPU integrada; menos en una dedicada): actívalo aparte si trabajas con mucho texto.");
         }
 
         row("Audio");

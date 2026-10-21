@@ -14,6 +14,8 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 - **Cliente Android con un teléfono**: usa el toque directo (se toca donde se quiere tocar en el otro teléfono).
 
 ### PC
+- **Botón «Calidad máxima»** (junto a «Latencia mínima», en la barra y en el menú): resolución nativa del host (sin escalar) y 50 % más bitrate, con el codificador rápido. Medido en una GPU AMD integrada: 2560x1440 a 127 Mbps cuesta ~2,6 ms más por cuadro que 1080p. El 4:4:4 no se activa solo porque ahí costaba ~7,7 ms más: queda como opción aparte para trabajar con mucho texto.
+- Medición por etapa de la latencia del host (`LANCAST_BENCH=1`, *Bench.HostLatencyBreakdown*): la conversión de color tarda 0,6–1,7 ms y el resto es el codificador por hardware, que crece con los píxeles codificados (el 4:4:4 empaquetado codifica el doble).
 - **La barra superior del stream se acomoda al ancho**: en una fila si cabe y, si no (por ejemplo en una pantalla de 1280x720 o en una ventana angosta), en dos o más filas, sin cortar ni esconder ningún control.
 
 ### Si el router cambia la IP (DHCP)

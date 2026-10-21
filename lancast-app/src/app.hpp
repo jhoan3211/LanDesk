@@ -83,6 +83,7 @@ private:
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
     void apply_min_latency();
+    void apply_max_quality();
     // Resolución y frecuencia del monitor donde está la ventana del cliente.
     [[nodiscard]] Size display_size() const;
     [[nodiscard]] std::uint32_t display_hz() const;
