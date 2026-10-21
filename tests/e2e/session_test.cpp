@@ -579,3 +579,27 @@ TEST_F(EndToEnd, AutoFecFollowsLoss) {
     client.disconnect();
     host.stop();
 }
+
+// Calibración: el host mide su codificador al arrancar (sin sesión) y lo informa en HostInfo.
+TEST_F(EndToEnd, HostReportsEncoderCalibration) {
+    const AppSettings host_settings = make_settings("Host-Calib", root_ / L"host-recv-cal");
+    const AppSettings client_settings = make_settings("Cliente-Calib", root_ / L"client-recv-cal");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    ASSERT_TRUE(wait_for([&] { return host.status().encode_420_ms > 0; }, 20000)) << "El host no midió su codificador";
+    const auto st = host.status();
+    std::printf("  Host: codificador a %ux%u: %.2f ms (4:4:4 %.2f ms)\n", st.calibrated_size.width, st.calibrated_size.height,
+                st.encode_420_ms, st.encode_444_ms);
+    client::ClientSession client(client_settings);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Calib"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    const auto info = *client.host_info();
+    EXPECT_NEAR(info.encode_420_cms / 100.0, st.encode_420_ms, 0.02);
+    EXPECT_NEAR(info.encode_444_cms / 100.0, st.encode_444_ms, 0.02);
+    client.disconnect();
+    host.stop();
+}

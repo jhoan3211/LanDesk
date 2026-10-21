@@ -13,6 +13,7 @@
 #include "lancast/core/media.hpp"
 #include "lancast/platform/audio.hpp"
 #include "lancast/platform/d3d.hpp"
+#include "lancast/platform/calibration.hpp"
 #include "lancast/platform/gamepad.hpp"
 #include "lancast/platform/input.hpp"
 #include "lancast/platform/marker_window.hpp"
@@ -94,6 +95,11 @@ struct HostService::Impl {
     std::thread file_thread;
     std::thread media_thread;
     std::thread discovery_thread;
+    std::thread calibration_thread;
+    std::atomic<bool> calibration_cancel{false};
+    int calibration_failures = 0;
+    bool calibrating = false;                     // Protegido por mutex.
+    std::optional<calib::Result> calibration;     // Protegido por mutex.
     std::vector<std::thread> handlers;
 
     bool listening = false;
@@ -170,6 +176,7 @@ struct HostService::Impl {
         file_thread = std::thread([this] { file_loop(); });
         media_thread = std::thread([this] { media_loop(); });
         if (discovery_socket.valid()) discovery_thread = std::thread([this] { discovery_loop(); });
+        calibration_thread = std::thread([this] { calibration_loop(); });
 
 
         std::scoped_lock lock(mutex);
@@ -195,7 +202,8 @@ struct HostService::Impl {
         media_socket.close();
         discovery_socket.shutdown();
         discovery_socket.close();
-        for (std::thread* t : {&accept_thread, &file_thread, &media_thread, &discovery_thread}) {
+        calibration_cancel = true;
+        for (std::thread* t : {&accept_thread, &file_thread, &media_thread, &discovery_thread, &calibration_thread}) {
             if (t->joinable()) t->join();
         }
         std::vector<std::thread> pending;
@@ -226,6 +234,58 @@ struct HostService::Impl {
             // Limpia hilos terminados.
             handlers.emplace_back([this, s = std::move(*stream), peer]() mutable { handle_connection(std::move(s), peer); });
         }
+    }
+
+    // Calibración del codificador: una vez por tarjeta y driver (unos 3 s), cuando no hay nadie conectado. Si alguien
+    // se conecta mientras mide, se corta y se reintenta más tarde.
+    void calibration_loop() {
+        for (int i = 0; i < 40 && running; ++i) Sleep(100);  // Que la app termine de abrir.
+        while (running) {
+            const auto gpus = platform::enumerate_gpus();
+            if (!gpus) return;
+            const auto monitors = platform::enumerate_monitors(*gpus);
+            if (!monitors) return;
+            const auto primary = std::ranges::find_if(*monitors, [](const MonitorInfo& m) { return m.primary; });
+            if (primary == monitors->end() || !primary->gpu_index || *primary->gpu_index >= gpus->size()) return;
+            const std::uint64_t luid = (*gpus)[*primary->gpu_index].luid;
+            const Size native{static_cast<std::uint32_t>(primary->desktop.width), static_cast<std::uint32_t>(primary->desktop.height)};
+            const std::string key = calib::gpu_key(luid);
+            if (auto cached = calib::load(key, Size{native.width & ~1u, native.height & ~1u})) {
+                set_calibration(*cached);
+                return;
+            }
+            if (current()) {  // Hay una sesión: se espera.
+                Sleep(2000);
+                continue;
+            }
+            {
+                std::scoped_lock lock(mutex);
+                calibrating = true;
+            }
+            calibration_cancel = false;
+            auto r = calib::measure(luid, native, calibration_cancel);
+            {
+                std::scoped_lock lock(mutex);
+                calibrating = false;
+            }
+            if (r) {
+                calib::save(*r);
+                set_calibration(*r);
+                log::info("Codificador medido ({} {}x{}): {:.2f} ms en 4:2:0, {:.2f} ms en 4:4:4", to_string(r->codec), r->native.width,
+                          r->native.height, r->ms_420, r->ms_444);
+                return;
+            }
+            if (!running) return;
+            // Cortada por una sesión o la GPU estaba ocupada: se reintenta pronto las primeras veces.
+            ++calibration_failures;
+            log::info("Calibración del codificador: {} (se reintenta)", r.error().message());
+            for (int i = 0; i < (calibration_failures < 3 ? 30 : 300) && running; ++i) Sleep(100);
+        }
+    }
+
+    void set_calibration(const calib::Result& r) {
+        std::scoped_lock lock(mutex);
+        calibration = r;
     }
 
     void file_loop() {
@@ -474,6 +534,7 @@ struct HostService::Impl {
             session = s;
         }
         guard.release();
+        calibration_cancel = true;  // El codificador queda para la sesión.
         log::info("Sesión iniciada con {} ({})", s->client_name, peer.ip_string());
         run_session(*s);
         end_session(s);
@@ -522,6 +583,13 @@ struct HostService::Impl {
         info.secure_desktop = service_mode;
         info.media_port = hs.media_port;
         info.file_port = static_cast<std::uint16_t>(hs.control_port + 1);
+        {
+            std::scoped_lock lock(mutex);
+            if (calibration) {
+                info.encode_420_cms = static_cast<std::uint16_t>(std::clamp(calibration->ms_420 * 100.0, 0.0, 65535.0));
+                info.encode_444_cms = static_cast<std::uint16_t>(std::clamp(calibration->ms_444 * 100.0, 0.0, 65535.0));
+            }
+        }
         info.gamepad_available = hs.allow_input && gamepad::driver_available();
         for (const auto& a : net::local_addresses()) {
             if (a.mask != 0 && (a.ip & a.mask) == (s.address.ip & a.mask)) {
@@ -772,6 +840,12 @@ Status HostService::status() const {
         st.pin = impl_->pin;
         st.pin_requester = impl_->pin_requester;
         st.view_only = impl_->force_view_only;
+        st.calibrating = impl_->calibrating;
+        if (impl_->calibration) {
+            st.encode_420_ms = impl_->calibration->ms_420;
+            st.encode_444_ms = impl_->calibration->ms_444;
+            st.calibrated_size = impl_->calibration->native;
+        }
         port = impl_->settings.host.control_port;
         s = impl_->session;
     }

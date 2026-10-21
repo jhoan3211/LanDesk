@@ -48,6 +48,11 @@ struct Status {
     std::string encoder_name;
     StreamStats stats;
     bool view_only = false;
+    // Calibración del codificador (se hace una vez por tarjeta y driver, en segundo plano).
+    bool calibrating = false;
+    double encode_420_ms = 0;  // A la resolución nativa del monitor principal.
+    double encode_444_ms = 0;
+    Size calibrated_size;
 };
 
 class HostService {

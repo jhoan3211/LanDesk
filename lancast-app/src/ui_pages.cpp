@@ -487,6 +487,15 @@ void App::draw_host_page() {
     } else {
         ImGui::TextColored(kMuted, "El host está desactivado.");
     }
+    if (st.calibrating) {
+        ImGui::TextColored(kMuted, "Midiendo el codificador de esta GPU (unos segundos, una sola vez)…");
+    } else if (st.encode_420_ms > 0) {
+        ImGui::TextColored(kMuted, "Codificador a %ux%u: %.1f ms por cuadro%s", st.calibrated_size.width, st.calibrated_size.height,
+                           st.encode_420_ms,
+                           st.encode_444_ms > 0 ? std::format(" · con 4:4:4: {:.1f} ms", st.encode_444_ms).c_str() : "");
+        ImGui::SetItemTooltip("Medido al abrir LanCast (una vez por tarjeta y versión del driver). «Calidad máxima» suma "
+                              "4:4:4 solo si cuesta 3 ms o menos.");
+    }
 
     if (st.session_active) {
         section("Sesión activa");

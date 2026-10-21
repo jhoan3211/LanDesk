@@ -163,6 +163,9 @@ struct HostInfo {
     std::array<std::uint8_t, 6> mac{};  // Opcional (1.7+): MAC del adaptador de la LAN (Wake-on-LAN); ceros = no se sabe.
     bool gamepad_available = false;     // Opcional (1.7+): el host puede crear mandos virtuales (driver ViGEmBus).
     std::uint8_t platform = kPlatformWindows;  // Opcional (1.8+): el host es un PC o un teléfono Android.
+    // Opcional (1.9+): calibración del codificador a la resolución nativa, en centésimas de ms (0 = sin medir).
+    std::uint16_t encode_420_cms = 0;
+    std::uint16_t encode_444_cms = 0;
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };

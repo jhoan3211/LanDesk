@@ -624,18 +624,34 @@ void App::apply_max_quality() {
         w = here.width;
         h = here.height;
     }
-    s.chroma_444 = false;
+    // 4:4:4 solo si el codificador del host lo hace rápido: lo midió al arrancar (calibración) y viene en HostInfo.
+    double extra_444 = -1;
+    if (session_) {
+        if (const auto info = session_->host_info(); info && info->encode_420_cms > 0 && info->encode_444_cms > 0) {
+            extra_444 = (info->encode_444_cms - info->encode_420_cms) / 100.0;
+        }
+    }
+    s.chroma_444 = extra_444 >= 0 && extra_444 <= 3.0;
     s.codec = CodecChoice::Auto;
     s.low_latency = true;
     s.rate_control = RateControl::Cbr;  // Bitrate parejo: sin ráfagas que retrasen cuadros.
     s.adaptive = true;
     const std::uint32_t fps = s.fps_match_display ? std::max<std::uint32_t>(display_hz(), 30) : std::max<std::uint32_t>(s.fps, 30);
     s.auto_bitrate = false;
-    s.bitrate_mbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(w, h, fps, Codec::Hevc) * 3 / 2, 40, 400);
+    // 4:4:4 empaquetado = el doble de píxeles para el codificador.
+    s.bitrate_mbps = s.chroma_444 ? std::clamp<std::uint32_t>(auto_bitrate_mbps(w, h * 2, fps, Codec::Hevc), 50, 400)
+                                  : std::clamp<std::uint32_t>(auto_bitrate_mbps(w, h, fps, Codec::Hevc) * 3 / 2, 40, 400);
     settings_.client.active_profile.clear();
     apply_stream_settings();
-    toast(std::format("Calidad máxima: {}x{} nativa, {} Mbps, codificador rápido. Para texto aún más nítido: 4:4:4 en Más opciones",
-                      w, h, s.bitrate_mbps));
+    if (s.chroma_444) {
+        toast(std::format("Calidad máxima: {}x{} nativa, 4:4:4 (el codificador del host lo hace en +{:.1f} ms), {} Mbps", w, h,
+                          extra_444, s.bitrate_mbps));
+    } else if (extra_444 > 0) {
+        toast(std::format("Calidad máxima: {}x{} nativa, {} Mbps. Sin 4:4:4: al codificador del host le costaría +{:.1f} ms", w, h,
+                          s.bitrate_mbps, extra_444));
+    } else {
+        toast(std::format("Calidad máxima: {}x{} nativa, {} Mbps, codificador rápido", w, h, s.bitrate_mbps));
+    }
 }
 
 void App::save_settings() {
