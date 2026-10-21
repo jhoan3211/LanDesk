@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <fstream>
+
+#include <shlobj.h>
 
 #include "app.hpp"
 #include "app_internal.hpp"
@@ -109,6 +112,50 @@ void App::draw_connect_page() {
         if (primary_button("Conectar", ImVec2(110 * scale_, 0))) {
             address_input_ = h.endpoint.port == kDefaultControlPort ? h.endpoint.ip_string() : h.endpoint.to_string();
             start_connect(address_input_);
+        }
+        ImGui::EndChild();
+        ImGui::PopID();
+    }
+
+    // Emparejados que no aparecen en la red (apagados, suspendidos o en otra IP): conectar a su última IP o despertarlos.
+    if (now - paired_hosts_checked_us_ > 4'000'000) {
+        paired_hosts_checked_us_ = now;
+        paired_hosts_.clear();
+        for (auto& d : sys::load_paired()) {
+            if (d.role == "host") paired_hosts_.push_back(std::move(d));
+        }
+    }
+    bool header = false;
+    for (const auto& d : paired_hosts_) {
+        if (std::ranges::any_of(hosts, [&](const client::DiscoveredHost& h) { return h.id_hex == d.id_hex; })) continue;
+        if (!header) {
+            section("Equipos emparejados que no responden");
+            header = true;
+        }
+        ImGui::PushID(d.id_hex.c_str());
+        ImGui::BeginChild("##paired", ImVec2(0, 64 * scale_), ImGuiChildFlags_Borders);
+        ImGui::PushFont(font_big_, 0.0f);
+        ImGui::TextUnformatted(d.name.c_str());
+        ImGui::PopFont();
+        ImGui::TextColored(kMuted, "%s%s", d.last_address.c_str(), d.mac.empty() ? "" : std::format(" · {}", d.mac).c_str());
+        ImGui::SameLine(ImGui::GetWindowWidth() - 250 * scale_);
+        ImGui::SetCursorPosY(14 * scale_);
+        ImGui::BeginDisabled(d.mac.empty());
+        if (ImGui::Button("Despertar", ImVec2(110 * scale_, 0))) {
+            const auto ep = net::Endpoint::parse(d.last_address, kDefaultControlPort);
+            if (net::wake_on_lan(d.mac, ep ? ep->ip : 0)) {
+                toast(std::format("Despertando {}… suele tardar 10-30 s en aparecer", d.name));
+            } else {
+                toast("No se pudo enviar el aviso de Wake-on-LAN");
+            }
+        }
+        ImGui::EndDisabled();
+        if (d.mac.empty()) ImGui::SetItemTooltip("Conéctate una vez con LanCast 1.7 o superior para conocer su MAC");
+        else ImGui::SetItemTooltip("Wake-on-LAN: el PC debe tenerlo activado en la BIOS y en la tarjeta de red");
+        ImGui::SameLine();
+        if (primary_button("Conectar", ImVec2(110 * scale_, 0))) {
+            address_input_ = d.last_address;
+            start_connect(d.last_address);
         }
         ImGui::EndChild();
         ImGui::PopID();
@@ -790,6 +837,85 @@ void App::draw_settings_page() {
     if (ImGui::SmallButton("Abrir carpeta de configuración")) sys::open_in_explorer(sys::app_data_dir());
 }
 
+// Archivo de texto para soporte en el escritorio: todo lo que sirve para entender un problema, sin secretos (los
+// emparejamientos y claves no se incluyen).
+std::filesystem::path App::write_support_file() {
+    if (!report_) report_ = platform::collect_system_report();
+    std::string t;
+    auto line = [&](const std::string& s) {
+        t += s;
+        t += "\r\n";
+    };
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    line(std::format("LanCast {} · diagnóstico del {:04}-{:02}-{:02} {:02}:{:02}", kAppVersion, now.wYear, now.wMonth, now.wDay,
+                     now.wHour, now.wMinute));
+    const sig::Info self_sig = sig::verify(sys::exe_path());
+    line(self_sig.valid ? "Firma: válida (" + self_sig.subject + ")" : "Firma: " + self_sig.error);
+    line("");
+    line("== Equipo ==");
+    t += format_report_text(*report_, true);
+    line("");
+    line("== Host ==");
+    const host::Status hs = host_.status();
+    line(std::format("Escuchando: {}{}", hs.listening ? "sí" : "no", hs.error.empty() ? "" : " · error: " + hs.error));
+    for (const auto& a : hs.addresses) line("  " + a);
+    if (hs.encode_420_ms > 0) {
+        line(std::format("Codificador medido a {}x{}: {:.2f} ms (4:4:4 {:.2f} ms)", hs.calibrated_size.width, hs.calibrated_size.height,
+                         hs.encode_420_ms, hs.encode_444_ms));
+    }
+    if (hs.session_active) {
+        line(std::format("Sesión con {} ({})", hs.client_name, hs.client_address));
+        if (hs.stream) {
+            line(std::format("  {} {}x{} @ {} fps · {} kbps · {}", to_string(hs.stream->codec), hs.stream->width, hs.stream->height,
+                             hs.stream->fps, hs.stream->bitrate_kbps, hs.encoder_name));
+        }
+        line(std::format("  Enviando {:.0f} fps · {:.1f} Mbps · captura+codificación {:.2f} ms · {:.1f} % saltados", hs.stats.fps,
+                         hs.stats.bitrate_mbps, hs.stats.encode_ms, hs.stats.skipped_percent));
+    }
+    line("");
+    line("== Cliente ==");
+    if (session_) {
+        line(std::format("Estado: {} · host {} · {}", client::to_string(session_->state()), session_->host_name(), session_->message()));
+        if (const auto st = session_->stream()) {
+            line(std::format("Stream: {} {}x{}{}{} @ {} fps · {} kbps · {}", to_string(st->codec), st->width, st->height,
+                             st->chroma_444 ? " 4:4:4" : "", st->hdr ? " HDR" : "", st->fps, st->bitrate_kbps, st->encoder_backend));
+        }
+        const client::Stats s = session_->stats();
+        line(std::format("FPS {:.0f} · {:.1f} Mbps · host {:.2f} ms · red {:.2f} ms · decodificación {:.2f} ms · presentación {:.2f} ms · "
+                         "total {:.2f} ms",
+                         s.fps, s.bitrate_mbps, s.encode_ms, s.network_ms, s.decode_ms, s.present_ms, s.total_ms));
+        line(std::format("RTT {:.2f} ms · pérdida {:.2f} % · FEC {} % · reparados {} · perdidos {} · keyframes pedidos {}", s.rtt_ms,
+                         s.packet_loss_pct, session_->current_fec(), s.frames_recovered, s.frames_lost, s.keyframe_requests));
+        if (s.real_latency_ms > 0) {
+            line(std::format("Latencia real medida: {:.1f} ms (mín {:.1f}, máx {:.1f})", s.real_latency_ms, s.real_latency_min_ms,
+                             s.real_latency_max_ms));
+        }
+    } else {
+        line("Sin sesión");
+    }
+    line("");
+    line("== Ajustes ==");
+    t += settings_to_toml(settings_);
+    line("");
+    line("== Cierres inesperados ==");
+    for (const auto& d : crash::list(sys::app_data_dir() / L"crashes")) line(detail::narrow(d.filename().wstring()));
+    line("");
+    line("== Registro (últimas 500 líneas) ==");
+    for (const auto& e : log::recent(500)) line(std::format("[{}] {}", log::level_name(e.level), e.message));
+
+    PWSTR desktop = nullptr;
+    std::filesystem::path dir = sys::app_data_dir();
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktop))) dir = desktop;
+    CoTaskMemFree(desktop);
+    const auto path = dir / std::format(L"LanCast-diagnostico-{:04}{:02}{:02}-{:02}{:02}{:02}.txt", now.wYear, now.wMonth, now.wDay,
+                                        now.wHour, now.wMinute, now.wSecond);
+    std::ofstream out(path, std::ios::binary);
+    out.write("\xEF\xBB\xBF", 3);  // UTF-8 con BOM: el Bloc de notas lo abre bien.
+    out.write(t.data(), static_cast<std::streamsize>(t.size()));
+    return out ? path : std::filesystem::path{};
+}
+
 void App::draw_diagnostics_page() {
     ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.3f);
     ImGui::TextUnformatted("Diagnóstico del equipo");
@@ -800,6 +926,18 @@ void App::draw_diagnostics_page() {
         ImGui::SetClipboardText(format_report_text(*report_, true).c_str());
         toast("Copiado");
     }
+    ImGui::SameLine();
+    if (primary_button("Crear archivo para soporte")) {
+        const auto path = write_support_file();
+        if (path.empty()) {
+            toast("No se pudo crear el archivo");
+        } else {
+            toast("Archivo creado en el escritorio: " + detail::narrow(path.filename().wstring()));
+            sys::open_in_explorer(path.parent_path());
+        }
+    }
+    ImGui::SetItemTooltip("Junta en un solo archivo de texto la versión, el equipo, el estado del host y de la sesión, las "
+                          "estadísticas y el registro, para mandarlo cuando algo falla. No incluye contraseñas ni claves.");
 
     // Firma digital de este ejecutable.
     static const sig::Info self_sig = sig::verify(sys::exe_path());

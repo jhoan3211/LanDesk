@@ -119,6 +119,7 @@ private:
     void draw_transfers(files::Manager& manager, const char* id);
     void draw_settings_page();
     void draw_diagnostics_page();
+    std::filesystem::path write_support_file();
     void draw_stream_overlay();
     void draw_stats_overlay();
     void draw_graphs();
@@ -171,6 +172,8 @@ private:
     std::atomic<bool> discovery_running_{false};
     std::mutex discovery_mutex_;
     std::string address_input_;
+    std::vector<sys::PairedDevice> paired_hosts_;  // Equipos emparejados (se relee cada 4 s en la página de conexión).
+    std::uint64_t paired_hosts_checked_us_ = 0;
     std::string pin_input_;
     bool pin_modal_open_ = false;
     bool show_menu_ = false;

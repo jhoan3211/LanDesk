@@ -100,6 +100,7 @@ std::vector<PairedDevice> load_paired() {
         d.name = t.get_string("name").value_or("");
         d.last_address = t.get_string("address").value_or("");
         d.role = t.get_string("role").value_or("");
+        d.mac = t.get_string("mac").value_or("");
         const auto blob = base64_decode(t.get_string("secret").value_or(""));
         if (!blob) continue;
         auto plain = crypto::unprotect(*blob);
@@ -119,6 +120,7 @@ void save_paired(const std::vector<PairedDevice>& devices) {
         t.set("name", d.name);
         t.set("address", d.last_address);
         t.set("role", d.role);
+        if (!d.mac.empty()) t.set("mac", d.mac);
         t.set("secret", base64_encode(crypto::protect(d.secret)));
         arr.push_back(std::move(t));
     }

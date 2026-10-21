@@ -245,6 +245,8 @@ private:
     std::optional<proto::StreamConfig> fec_pending_;  // Se envía fuera del candado.
     std::uint64_t fec_clean_since_us_ = 0;
     void auto_fec_tick(const NetSample& s, std::uint64_t now);
+    void remember_mac();
+    std::string host_id_;  // Protegido por mutex_.
     void tick_history(std::uint64_t now);  // Con mutex_ tomado.
 
     void send_next_probe();

@@ -242,6 +242,28 @@ void ClientSession::request_stream(const proto::StreamConfig& config) {
     send_message(proto::encode(proto::MsgType::StreamConfig, c));
 }
 
+// MAC del host (Wake-on-LAN) guardada con su emparejamiento.
+void ClientSession::remember_mac() {
+    std::string id;
+    std::array<std::uint8_t, 6> mac{};
+    {
+        std::scoped_lock lock(mutex_);
+        if (!host_info_) return;
+        mac = host_info_->mac;
+        id = host_id_;
+    }
+    if (id.empty() || std::ranges::all_of(mac, [](std::uint8_t b) { return b == 0; })) return;
+    const std::string text = std::format("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    auto paired = sys::load_paired();
+    for (auto& d : paired) {
+        if (d.role == "host" && d.id_hex == id && d.mac != text) {
+            d.mac = text;
+            sys::save_paired(paired);
+            return;
+        }
+    }
+}
+
 void ClientSession::auto_fec_tick(const NetSample& s, std::uint64_t now) {
     if (!auto_fec_ || !last_config_) return;
     const int cur = fec_current_.load();
@@ -330,6 +352,10 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
     }
 
     const std::string host_id = to_hex(ack->device_id);
+    {
+        std::scoped_lock lock(mutex_);
+        host_id_ = host_id;
+    }
     auto paired = sys::load_paired();
     const auto known = std::ranges::find_if(paired, [&](const sys::PairedDevice& d) { return d.role == "host" && d.id_hex == host_id; });
     const bool use_pairing = ack->has_pairing && known != paired.end();
@@ -484,6 +510,7 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                         host_info_ = std::move(*h);
                     }
                     if (first) media_ = std::thread([this] { media_thread(); });
+                    remember_mac();
                 }
                 break;
             case proto::MsgType::StreamStarted:

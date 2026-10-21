@@ -140,6 +140,7 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     override fun onStop() {
         super.onStop()
         if (pickingFiles) return
+        session?.history()?.let { if (it.isNotEmpty()) AppLog.lastStats = it }
         gamepads.disconnectAll()
         pad?.release()
         files?.close()
@@ -358,6 +359,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onStreamStarted(stream: StreamStarted) {
         this.stream = stream
+        AppLog.lastStream = "${stream.codec.label} ${stream.width}x${stream.height} @ ${stream.fps} fps · ${stream.bitrateKbps} kbps · ${stream.encoderBackend}"
+        AppLog.add("Stream con $address: ${AppLog.lastStream}")
         ui.post {
             monitorId = stream.monitorId.takeIf { it != 0 } ?: monitorId
             surfaceView.holder.setFixedSize(stream.width, stream.height)
@@ -405,9 +408,14 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onCursorShape(shape: CursorShape) = ui.post { cursorView.setShape(shape) }.let {}
 
-    override fun onMessage(text: String) = ui.post { Toast.makeText(this, text, Toast.LENGTH_LONG).show() }.let {}
+    override fun onMessage(text: String) = ui.post {
+        AppLog.add("Aviso: $text")
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+    }.let {}
 
     override fun onClosed(reason: String, retryable: Boolean) = ui.post {
+        AppLog.add("Conexión con $address cerrada: $reason")
+        session?.history()?.let { if (it.isNotEmpty()) AppLog.lastStats = it }
         if (isFinishing || session == null) return@post
         // Corte de red: reintentar cada 2 s durante 1 minuto (ya emparejados, sin PIN).
         if (retryable && connectedOnce) {
