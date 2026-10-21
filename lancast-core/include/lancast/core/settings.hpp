@@ -92,6 +92,7 @@ struct ClientSettings {
     bool show_stats = false;
     bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).
     bool microphone = false;  // Enviar el micrófono de este equipo al host.
+    bool echo_cancel = true;  // Restar del micrófono el audio del host que suena por los parlantes.
     bool keep_decoder_awake = true;  // Mantener despierta la unidad de video de la GPU (menos latencia, algo más de consumo).
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
     // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.

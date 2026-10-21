@@ -124,6 +124,9 @@ public:
     void set_auto_fec(bool on) noexcept { auto_fec_ = on; }
     // Enviar el micrófono predeterminado de este equipo al host (solo si el host lo acepta: HostInfo::mic_available).
     void set_microphone(bool on) noexcept { microphone_ = on; }
+    // Restar del micrófono el audio del host que suena por los parlantes (si Windows no lo hace ya).
+    void set_echo_cancel(bool on) noexcept { echo_cancel_ = on; }
+    [[nodiscard]] bool echo_cancel_active() const noexcept { return echo_cancel_active_; }
     [[nodiscard]] bool microphone_active() const noexcept { return mic_active_; }
     [[nodiscard]] int current_fec() const noexcept { return fec_current_.load(); }
     void stop_second_stream();
@@ -193,6 +196,8 @@ private:
     std::optional<proto::HostInfo> host_info_;
     std::atomic<bool> microphone_{false};
     std::atomic<bool> mic_active_{false};
+    std::atomic<bool> echo_cancel_{true};
+    std::atomic<bool> echo_cancel_active_{false};
 
     // Video: un "slot" por stream (principal y segunda ventana). Campos protegidos por mutex_, salvo el
     // ensamblador y el unidor de slices, que solo usa el hilo de medios.

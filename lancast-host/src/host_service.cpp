@@ -355,7 +355,7 @@ struct HostService::Impl {
         std::wstring device;
         {
             std::scoped_lock lock(mutex);
-            if (!settings.host.allow_microphone) return;
+            if (!settings.host.allow_microphone || s.view_only) return;
             device = s.mic_device;
         }
         if (device.empty()) return;
@@ -632,8 +632,11 @@ struct HostService::Impl {
             }
         }
         info.gamepad_available = hs.allow_input && gamepad::driver_available();
-        if (hs.allow_microphone) {
-            if (const auto dev = audio::virtual_mic_device()) {
+        if (hs.allow_microphone && !s.view_only) {  // En "solo ver" no se habla por el micrófono.
+            if (const auto dev = audio::virtual_mic_device(); dev && dev->default_output) {
+                // Lo que suena en la salida predeterminada se transmite al cliente: su voz volvería (eco).
+                log::warn("Micrófono del cliente desactivado: \"{}\" es la salida predeterminada (habría eco)", dev->name);
+            } else if (dev) {
                 info.mic_available = true;
                 std::scoped_lock lock(mutex);
                 s.mic_device = dev->id;

@@ -254,7 +254,7 @@ void App::draw_stream_toolbar() {
     }
 
     // Micrófono de este equipo -> host (solo si el host tiene un cable de audio virtual para recibirlo).
-    if (info && info->mic_available) {
+    if (info && info->mic_available && control_enabled()) {  // En "solo ver" no se habla por el micrófono.
         const bool on = settings_.client.microphone;
         const char* mic_label = on ? "Micrófono encendido" : "Micrófono apagado";
         place(button_w(mic_label));

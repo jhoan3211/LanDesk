@@ -407,6 +407,10 @@ void App::render() {
     bool new_video = false;
     client::Frame last_frame;
     double decode_ms = 0;
+    if (session_) {
+        session_->set_microphone(settings_.client.microphone && control_enabled());  // Solo ver: sin micrófono.
+        session_->set_echo_cancel(settings_.client.echo_cancel);
+    }
     if (streaming() && settings_.client.keep_decoder_awake) {
         if (!keep_awake_) keep_awake_.emplace(device_.luid);
     } else if (keep_awake_) {

@@ -173,6 +173,7 @@ std::string settings_to_toml(const AppSettings& s) {
     c.set("show_graphs", s.client.show_graphs);
     c.set("keep_decoder_awake", s.client.keep_decoder_awake);
     c.set("microphone", s.client.microphone);
+    c.set("echo_cancel", s.client.echo_cancel);
     c.set("simulate_loss_percent", static_cast<std::int64_t>(s.client.simulate_loss_percent));
     c.set("toolbar_collapsed", s.client.toolbar_collapsed);
     c.set("toolbar_tab_percent", static_cast<std::int64_t>(s.client.toolbar_tab_percent));
@@ -230,6 +231,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.client.show_graphs = c->get_bool("show_graphs").value_or(false);
         s.client.keep_decoder_awake = c->get_bool("keep_decoder_awake").value_or(true);
         s.client.microphone = c->get_bool("microphone").value_or(false);
+        s.client.echo_cancel = c->get_bool("echo_cancel").value_or(true);
         s.client.simulate_loss_percent = clamp_u32(c->get_int("simulate_loss_percent").value_or(0), 0, 50);
         s.client.toolbar_collapsed = c->get_bool("toolbar_collapsed").value_or(false);
         s.client.toolbar_tab_percent = clamp_u32(c->get_int("toolbar_tab_percent").value_or(100), 50, 300);

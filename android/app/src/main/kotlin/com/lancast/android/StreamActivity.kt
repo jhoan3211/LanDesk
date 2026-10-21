@@ -276,6 +276,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     }.let {}
 
     override fun onHostInfo(info: HostInfo) = ui.post {
+        if ((!info.inputAllowed || !info.micAvailable) && mic.active) {  // Pasó a "solo ver": el micrófono se apaga.
+            mic.stop()
+            micButton?.text = "Micrófono: no"
+        }
         if (!info.inputAllowed) {
             val why = if (info.platform == HostServer.PLATFORM_ANDROID) "no activó el control remoto (Accesibilidad)" else "no permite el control"
             Toast.makeText(this, "${info.hostName} $why: solo ver", Toast.LENGTH_LONG).show()
@@ -949,6 +953,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private fun toggleMic() {
         if (mic.active) {
             mic.stop()
+        } else if (session?.hostInfo?.inputAllowed != true) {
+            Toast.makeText(this, "En modo solo ver no se puede hablar por el micrófono", Toast.LENGTH_LONG).show()
         } else if (session?.hostInfo?.micAvailable != true) {
             AlertDialog.Builder(this).setTitle("Micrófono")
                 .setMessage("Para que tu micrófono llegue al PC como un micrófono más (Discord, Teams, juegos), el PC necesita " +

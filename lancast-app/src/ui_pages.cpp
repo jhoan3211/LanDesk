@@ -475,6 +475,14 @@ void App::draw_stream_settings(bool live) {
         ImGui::EndDisabled();
         if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
         help("Paquetes de paridad Reed-Solomon: recuperan pérdidas sin esperar retransmisiones. 10–20% es lo recomendado.");
+        row("Micrófono");
+        if (ImGui::Checkbox("Cancelar el eco##aec", &settings_.client.echo_cancel)) save_settings();
+        if (session_ && session_->microphone_active()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(session_->echo_cancel_active() ? "activa" : "apagada");
+        }
+        help("Con parlantes, el micrófono capta el sonido del host y lo devolvería (eco en las llamadas allá). LanCast "
+             "resta del micrófono lo que suena por los parlantes. Con audífonos puedes apagarlo.");
         row("Decodificación");
         if (ImGui::Checkbox("Mantener despierta la unidad de video##awake", &settings_.client.keep_decoder_awake)) save_settings();
         if (keep_awake_) {
@@ -594,10 +602,15 @@ void App::draw_host_page() {
         if (gpu::now_us() - virtual_mic_checked_us_ > 3'000'000) {
             const auto dev = audio::virtual_mic_device();
             virtual_mic_name_ = dev ? dev->name : std::string{};
+            virtual_mic_is_default_ = dev && dev->default_output;
             virtual_mic_checked_us_ = gpu::now_us();
         }
         ImGui::Indent();
-        if (!virtual_mic_name_.empty()) {
+        if (virtual_mic_is_default_) {
+            ImGui::TextColored(kBad, "\"%s\" está como salida de sonido predeterminada: la voz del cliente volvería a él (eco). "
+                                     "Elige tus parlantes como salida predeterminada en Windows.",
+                               virtual_mic_name_.c_str());
+        } else if (!virtual_mic_name_.empty()) {
             ImGui::TextColored(kMuted, "Llega a \"%s\": en Discord, Teams o el juego elige su micrófono \"CABLE Output\".",
                                virtual_mic_name_.c_str());
         } else {

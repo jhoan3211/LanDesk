@@ -13,6 +13,26 @@ target_include_directories(vigem_client SYSTEM PUBLIC ${vigemclient_SOURCE_DIR}/
 target_link_libraries(vigem_client PRIVATE setupapi)
 target_compile_options(vigem_client PRIVATE /W0)
 
+# SpeexDSP (BSD, versión fija): cancelación de eco del micrófono del cliente. Resta del micrófono el audio del host
+# que suena por los parlantes, para que no vuelva al host. Solo el cancelador (mdf) y el preprocesador.
+FetchContent_Declare(speexdsp
+    URL https://github.com/xiph/speexdsp/archive/refs/tags/SpeexDSP-1.2.1.zip
+    URL_HASH SHA256=be16e16bcbc26875916a8eedd3b5b46cb93bef4714c49895a28f8c86b81437cf
+    SOURCE_SUBDIR no-cmake
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(speexdsp)
+file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/speexdsp/speex/speexdsp_config_types.h
+    "#ifndef __SPEEX_TYPES_H__\n#define __SPEEX_TYPES_H__\n#include <stdint.h>\ntypedef int16_t spx_int16_t;\ntypedef uint16_t spx_uint16_t;\ntypedef int32_t spx_int32_t;\ntypedef uint32_t spx_uint32_t;\n#endif\n")
+add_library(speexdsp STATIC
+    ${speexdsp_SOURCE_DIR}/libspeexdsp/mdf.c
+    ${speexdsp_SOURCE_DIR}/libspeexdsp/preprocess.c
+    ${speexdsp_SOURCE_DIR}/libspeexdsp/filterbank.c
+    ${speexdsp_SOURCE_DIR}/libspeexdsp/fftwrap.c
+    ${speexdsp_SOURCE_DIR}/libspeexdsp/smallft.c)
+target_include_directories(speexdsp SYSTEM PUBLIC ${speexdsp_SOURCE_DIR}/include ${CMAKE_CURRENT_BINARY_DIR}/speexdsp)
+target_compile_definitions(speexdsp PRIVATE FLOATING_POINT USE_SMALLFT EXPORT=)
+target_compile_options(speexdsp PRIVATE /W0)
+
 # Capa de plataforma Windows compartida por host y cliente.
 add_library(lancast_platform STATIC
     src/com.cpp
@@ -58,5 +78,5 @@ target_include_directories(lancast_platform SYSTEM PRIVATE
 target_link_libraries(lancast_platform
     PUBLIC lancast::core
     PRIVATE dxgi d3d11 dxguid mfplat mfuuid mf shcore user32 ole32 oleaut32 bcrypt crypt32 ws2_32 iphlpapi
-            ole32 uuid shell32 advapi32 gdi32 userenv wtsapi32 wintrust d3dcompiler vigem_client)
+            ole32 uuid shell32 advapi32 gdi32 userenv wtsapi32 wintrust d3dcompiler vigem_client speexdsp)
 lancast_set_warnings(lancast_platform)

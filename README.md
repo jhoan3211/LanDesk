@@ -226,6 +226,8 @@ tests/              Unitarias (core), integración con el hardware (platform) y 
 | Dear ImGui | v1.92.9 | Interfaz gráfica (compilada dentro del .exe) |
 | AMD AMF SDK (encabezados, MIT) | 1.5.2 | Codificador AMD directo (`third_party/amf`; el runtime viene con el driver) |
 | NVIDIA Video Codec SDK (encabezados, MIT) | 13.1 | Codificador NVIDIA directo (`third_party/nvenc`; el runtime viene con el driver) |
+| ViGEmClient (MIT) | 1.21.222.0 | Mandos virtuales de Xbox en el host (con el driver ViGEmBus) |
+| SpeexDSP (BSD) | 1.2.1 | Cancelación de eco del micrófono del cliente |
 | GoogleTest | v1.18.0 | Pruebas |
 
 ## Pendiente

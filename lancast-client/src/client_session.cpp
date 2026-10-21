@@ -7,6 +7,7 @@
 #include <format>
 #include <random>
 
+#include "lancast/core/audio_resample.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/platform/crypto.hpp"
@@ -667,13 +668,65 @@ void ClientSession::media_thread() {
         if (tx.seal(header, body, sealed)) sock->send_to(host_media, sealed);
     };
     // Micrófono: mono, en trozos de hasta 10 ms, mismo formato que el audio del host.
+    // Cancelación de eco: lo que el reproductor entrega a los parlantes (el audio del host) es la referencia que se
+    // resta del micrófono, para que no vuelva al host. A la frecuencia del micrófono.
+    std::mutex aec_mutex;
+    std::shared_ptr<audio::EchoCanceller> aec;
+    audio::Resampler aec_resampler;
+    std::vector<std::int16_t> aec_stereo;
+    std::vector<std::int16_t> aec_ref;
+    player_.set_tap([&](std::span<const std::int16_t> pcm, const audio::Format& fmt) {
+        std::shared_ptr<audio::EchoCanceller> a;
+        {
+            std::scoped_lock lock(aec_mutex);
+            a = aec;
+        }
+        if (!a || fmt.channels == 0) return;
+        std::span<const std::int16_t> stereo = pcm;
+        if (fmt.channels == 1) {  // El resampler espera estéreo.
+            aec_stereo.resize(pcm.size() * 2);
+            for (std::size_t i = 0; i < pcm.size(); ++i) aec_stereo[2 * i] = aec_stereo[2 * i + 1] = pcm[i];
+            stereo = aec_stereo;
+        }
+        aec_resampler.configure(fmt.sample_rate, a->rate(), 1);
+        aec_resampler.process(stereo, aec_ref);
+        a->playback(aec_ref);
+    });
+    struct TapGuard {
+        audio::Player& player;
+        ~TapGuard() { player.set_tap({}); }
+    } tap_guard{player_};
+
     audio::LoopbackCapture mic;
     std::uint32_t mic_seq = 0;
     std::vector<std::int16_t> mono;
+    std::vector<std::int16_t> cleaned;
     auto on_mic = [&](std::span<const std::int16_t> pcm, std::uint32_t frames, const audio::Format& fmt) {
         mono.resize(frames);
         for (std::uint32_t f = 0; f < frames; ++f) {
             mono[f] = static_cast<std::int16_t>((static_cast<int>(pcm[2 * f]) + pcm[2 * f + 1]) / 2);
+        }
+        const bool use_aec = echo_cancel_ && !mic.echo_cancellation();
+        {
+            std::scoped_lock lock(aec_mutex);
+            if (use_aec && (!aec || aec->rate() != fmt.sample_rate)) {
+                aec = std::make_shared<audio::EchoCanceller>(fmt.sample_rate);
+                log::info("Micrófono: cancelación de eco de LanCast a {} Hz", fmt.sample_rate);
+            } else if (!use_aec && aec) {
+                aec.reset();
+            }
+        }
+        echo_cancel_active_ = use_aec || mic.echo_cancellation();
+        if (use_aec) {
+            std::shared_ptr<audio::EchoCanceller> a;
+            {
+                std::scoped_lock lock(aec_mutex);
+                a = aec;
+            }
+            cleaned.clear();
+            a->capture(mono, cleaned);
+            mono.swap(cleaned);
+            frames = static_cast<std::uint32_t>(mono.size());
         }
         const std::uint32_t chunk = std::max<std::uint32_t>(fmt.sample_rate / 100, 1);
         const std::uint64_t now = gpu::now_us();

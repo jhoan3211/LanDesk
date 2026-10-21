@@ -168,7 +168,8 @@ private:
     std::unique_ptr<VideoRenderer> renderer_;
     std::optional<mf::VideoEngineKeepAwake> keep_awake_;
     std::string virtual_mic_name_;  // Cable de audio virtual del host (vacío = no hay).
-    std::uint64_t virtual_mic_checked_us_ = 0;  // Solo mientras hay stream.
+    std::uint64_t virtual_mic_checked_us_ = 0;
+    bool virtual_mic_is_default_ = false;  // Solo mientras hay stream.
     std::vector<client::DiscoveredHost> discovered_;
     std::uint64_t last_discovery_us_ = 0;
     std::thread discovery_thread_;
