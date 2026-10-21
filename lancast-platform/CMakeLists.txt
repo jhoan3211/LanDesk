@@ -67,7 +67,8 @@ add_library(lancast_platform STATIC
     src/color.cpp
     src/gamepad.cpp
     src/calibration.cpp
-    src/video_keep_awake.cpp)
+    src/video_keep_awake.cpp
+    src/amf_upscaler.cpp)
 add_library(lancast::platform ALIAS lancast_platform)
 
 target_include_directories(lancast_platform PUBLIC include PRIVATE src)
