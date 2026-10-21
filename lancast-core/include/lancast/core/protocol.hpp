@@ -169,6 +169,9 @@ struct HostInfo {
     std::uint16_t encode_444_cms = 0;
     // Opcional (1.9+): el host recibe el micrófono del cliente (tiene un cable de audio virtual y lo permite).
     bool mic_available = false;
+    // Opcional (1.9+): este cliente es un espectador (solo ve; otro equipo tiene el control) y quién controla.
+    bool spectator = false;
+    std::string controller_name;
     void write(ByteWriter& w) const;
     static std::optional<HostInfo> read(ByteReader& r);
 };

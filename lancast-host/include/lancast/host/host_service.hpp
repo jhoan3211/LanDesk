@@ -47,6 +47,7 @@ struct Status {
     std::optional<proto::StreamStarted> stream;
     std::string encoder_name;
     StreamStats stats;
+    std::vector<std::string> viewers;  // Espectadores (solo ven): "nombre (IP)".
     bool view_only = false;
     // Calibración del codificador (se hace una vez por tarjeta y driver, en segundo plano).
     bool calibrating = false;
@@ -69,6 +70,8 @@ public:
 
     [[nodiscard]] Status status() const;
     void disconnect();
+    // Espectadores conectados (solo ven lo mismo que quien controla).
+    void disconnect_viewers();
     void set_view_only(bool view_only);
     // Agente del servicio de Windows: anuncia bloqueo/UAC y acepta Ctrl+Alt+Supr.
     void set_service_mode(bool service_mode);

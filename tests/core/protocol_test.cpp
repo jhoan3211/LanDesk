@@ -189,7 +189,7 @@ TEST(Protocol, HostInfoSecureDesktopIsOptional) {
     ByteWriter w;
     h.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 1 - 7 - 1 - 4 - 1);  // Sin secure_desktop (1.3), MAC/mando (1.7), plataforma (1.8), calibración ni micrófono (1.9).
+    old_bytes.resize(old_bytes.size() - 1 - 7 - 1 - 4 - 1 - 5);  // Sin secure_desktop (1.3), MAC/mando (1.7), plataforma (1.8), calibración, micrófono ni espectador (1.9).
     ByteReader r(old_bytes);
     const auto out = HostInfo::read(r);
     ASSERT_TRUE(out.has_value());
@@ -278,6 +278,20 @@ TEST(Protocol, ColorFeaturesAreOptional) {
     }
 }
 
+TEST(Protocol, HostInfoSpectator) {
+    HostInfo h;
+    h.host_name = "PC";
+    h.spectator = true;
+    h.controller_name = "Portátil de Ana";
+    ByteWriter w;
+    h.write(w);
+    ByteReader r(w.data());
+    const auto back = HostInfo::read(r);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_TRUE(back->spectator);
+    EXPECT_EQ(back->controller_name, "Portátil de Ana");
+}
+
 TEST(Protocol, GamepadRumble) {
     const GamepadRumble g{3, 255, 17};
     ByteWriter w;
@@ -322,7 +336,7 @@ TEST(Protocol, GamepadAndWakeOnLanFields) {
     ByteWriter hw;
     h.write(hw);
     std::vector<std::uint8_t> old = hw.take();
-    old.resize(old.size() - 7 - 1 - 4 - 1);  // Sin MAC/mando (1.7), plataforma (1.8), calibración ni micrófono (1.9).
+    old.resize(old.size() - 7 - 1 - 4 - 1 - 5);  // Sin MAC/mando (1.7), plataforma (1.8), calibración, micrófono ni espectador (1.9).
     ByteReader hr(old);
     const auto ho = HostInfo::read(hr);
     ASSERT_TRUE(ho.has_value());

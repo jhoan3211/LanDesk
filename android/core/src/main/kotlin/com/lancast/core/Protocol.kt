@@ -151,6 +151,8 @@ data class HostInfo(
     val gamepadAvailable: Boolean = false,   // 1.7+: el PC tiene el driver de mandos virtuales (ViGEmBus).
     val platform: Int = 0,                   // 1.8+: 0 = Windows, 1 = Android (teléfono compartiendo su pantalla).
     val micAvailable: Boolean = false,       // 1.9+: el PC recibe el micrófono del cliente (cable de audio virtual).
+    val spectator: Boolean = false,          // 1.9+: este teléfono solo mira; otro equipo tiene el control.
+    val controllerName: String = "",         // 1.9+: quién controla (para un espectador).
 ) {
     val hasMac: Boolean get() = mac.any { it.toInt() != 0 }
 
@@ -189,7 +191,14 @@ data class HostInfo(
                 r.u16()
             }
             val mic = r.ok && r.remaining >= 1 && r.bool()
-            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad, platform, mic)
+            var spectator = false
+            var controller = ""
+            if (r.ok && r.remaining >= 1) {
+                spectator = r.bool()
+                controller = r.str(256)
+            }
+            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad,
+                platform, mic, spectator, controller)
             else null
         }
     }

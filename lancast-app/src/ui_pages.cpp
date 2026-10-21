@@ -104,7 +104,8 @@ void App::draw_connect_page() {
         if (h.paired) badge("emparejado", kGood);
         if (h.busy) {
             ImGui::SameLine();
-            badge("ocupado", kWarn);
+            badge("en uso", kWarn);
+            ImGui::SetItemTooltip("Alguien lo está controlando. Si el host permite espectadores, al conectarte lo ves (solo ver).");
         }
         ImGui::TextColored(kMuted, "%s", h.endpoint.to_string().c_str());
         ImGui::SameLine(ImGui::GetWindowWidth() - 130 * scale_);
@@ -576,8 +577,19 @@ void App::draw_host_page() {
                 ImGui::TextColored(kWarn, "El codificador no da abasto: %.0f %% de cuadros saltados", st.stats.skipped_percent);
             }
         }
+        if (!st.viewers.empty()) {
+            ImGui::TextColored(kMuted, "Espectadores (solo ven): %s", [&] {
+                std::string all;
+                for (const auto& v : st.viewers) all += (all.empty() ? "" : ", ") + v;
+                return all;
+            }().c_str());
+        }
         if (danger_button("Desconectar")) host_.disconnect();
         ImGui::SameLine();
+        if (!st.viewers.empty()) {
+            if (ImGui::Button("Desconectar espectadores")) host_.disconnect_viewers();
+            ImGui::SameLine();
+        }
         bool view_only = st.view_only;
         if (ImGui::Checkbox("Solo ver (bloquear el control)", &view_only)) host_.set_view_only(view_only);
         ImGui::SameLine();
@@ -597,6 +609,7 @@ void App::draw_host_page() {
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.host.allow_clipboard);
     changed |= ImGui::Checkbox("Permitir transferencia de archivos", &settings_.host.allow_files);
     changed |= ImGui::Checkbox("Transmitir el audio del equipo", &settings_.host.allow_audio);
+    changed |= ImGui::Checkbox("Permitir espectadores (otros ven mientras alguien controla, hasta 4)", &settings_.host.allow_viewers);
     changed |= ImGui::Checkbox("Recibir el micrófono del cliente", &settings_.host.allow_microphone);
     if (settings_.host.allow_microphone) {
         if (gpu::now_us() - virtual_mic_checked_us_ > 3'000'000) {

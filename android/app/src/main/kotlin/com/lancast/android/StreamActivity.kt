@@ -280,7 +280,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
             mic.stop()
             micButton?.text = "Micrófono: no"
         }
-        if (!info.inputAllowed) {
+        if (info.spectator) {
+            val who = if (info.controllerName.isNotEmpty()) " (controla ${info.controllerName})" else ""
+            Toast.makeText(this, "Espectador$who: solo ves y escuchas", Toast.LENGTH_LONG).show()
+        } else if (!info.inputAllowed) {
             val why = if (info.platform == HostServer.PLATFORM_ANDROID) "no activó el control remoto (Accesibilidad)" else "no permite el control"
             Toast.makeText(this, "${info.hostName} $why: solo ver", Toast.LENGTH_LONG).show()
         }

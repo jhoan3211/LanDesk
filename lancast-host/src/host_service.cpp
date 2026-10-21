@@ -56,7 +56,8 @@ struct Session {
     std::string client_name;
     net::Endpoint address;
     proto::ClientCaps caps;
-    std::unique_ptr<net::MediaSender> media;
+    std::shared_ptr<net::MediaSender> media;  // Compartido: un espectador es un "espejo" del de quien controla.
+    bool spectator = false;                   // Solo ve el stream de quien controla (sin streamer propio).
     std::unique_ptr<net::DatagramCipher> media_rx;
     std::unique_ptr<net::DatagramCipher> audio_cipher;
     std::vector<std::uint8_t> audio_scratch;
@@ -115,6 +116,7 @@ struct HostService::Impl {
     std::atomic<bool> pairing_cancelled{false};
     std::map<std::uint32_t, std::pair<int, std::uint64_t>> failures;
     std::shared_ptr<Session> session;
+    std::vector<std::shared_ptr<Session>> viewers;  // Espectadores de `session` (solo ven).
     std::atomic<bool> handshake_in_progress{false};
     std::uint32_t pending_ip = 0;
     bool force_view_only = false;
@@ -312,6 +314,17 @@ struct HostService::Impl {
         }
     }
 
+    // Sesión principal y espectadores que vienen de esa IP.
+    std::vector<std::shared_ptr<Session>> media_candidates(std::uint32_t ip) {
+        std::scoped_lock lock(mutex);
+        std::vector<std::shared_ptr<Session>> out;
+        if (session && session->address.ip == ip) out.push_back(session);
+        for (const auto& v : viewers) {
+            if (v->address.ip == ip) out.push_back(v);
+        }
+        return out;
+    }
+
     void media_loop() {
         std::vector<std::uint8_t> buf(2048);
         std::vector<std::uint8_t> payload;
@@ -322,9 +335,14 @@ struct HostService::Impl {
             if (*n == 0) continue;
             const auto header = media::PacketHeader::read({buf.data(), *n});
             if (!header || (header->type != media::PacketType::ClientHello && header->type != media::PacketType::Mic)) continue;
-            auto s = current();
-            if (!s || !s->media_rx || from.ip != s->address.ip) continue;
-            if (!s->media_rx->open({buf.data(), *n}, payload)) continue;
+            std::shared_ptr<Session> s;
+            for (const auto& c : media_candidates(from.ip)) {
+                if (c->media_rx && c->media_rx->open({buf.data(), *n}, payload)) {
+                    s = c;
+                    break;
+                }
+            }
+            if (!s) continue;
             if (header->type == media::PacketType::Mic) {
                 on_mic(*s, payload);
                 continue;
@@ -333,6 +351,9 @@ struct HostService::Impl {
             if (!old || !(*old == from)) {
                 s->media->set_endpoint(from);
                 log::info("Medios: enviando a {}", from.to_string());
+                if (s->spectator) {
+                    if (auto leader = current(); leader && leader->streamer) leader->streamer->request_keyframe();
+                }
                 if (s->streamer) s->streamer->request_keyframe();
                 if (s->second) s->second->request_keyframe();
             }
@@ -439,9 +460,10 @@ struct HostService::Impl {
             if (f.first >= kMaxFailures && gpu::now_us() - f.second < kLockoutUs) {
                 ack.accepted = false;
                 ack.message = "Demasiados intentos fallidos. Espera 10 minutos.";
-            } else if ((session && session->client_id != client_id) || handshake_in_progress) {
+            } else if ((session && session->client_id != client_id && !viewer_slot_free(client_id)) || handshake_in_progress) {
                 // Si es el mismo equipo que ya tiene sesión (se reconecta tras un corte), se le deja autenticarse:
-                // la sesión vieja se reemplaza solo después de que demuestre su identidad.
+                // la sesión vieja se reemplaza solo después de que demuestre su identidad. Con espectadores
+                // permitidos, otro equipo entra a solo ver.
                 ack.accepted = false;
                 ack.message = session ? std::format("{} ya tiene una sesión activa", settings.device_name)
                                       : "Hay otro emparejamiento en curso";
@@ -555,8 +577,45 @@ struct HostService::Impl {
 
         stream.set_recv_timeout(15000);  // El cliente hace ping cada segundo.
         s->channel = std::make_unique<net::SecureChannel>(std::move(stream), s->keys.control_h2c, s->keys.control_c2h);
-        s->media = std::make_unique<net::MediaSender>(media_socket, s->keys.media_h2c);
+        s->media = std::make_shared<net::MediaSender>(media_socket, s->keys.media_h2c);
         s->media_rx = std::make_unique<net::DatagramCipher>(s->keys.media_c2h);
+        // Otro equipo ya controla: entra como espectador (solo ve el mismo video y escucha el mismo audio).
+        std::shared_ptr<Session> leader;
+        std::shared_ptr<Session> old_viewer;
+        {
+            std::scoped_lock lock(mutex);
+            if (session && session->client_id != client_id) {
+                leader = session;
+                const auto it = std::ranges::find(viewers, client_id, &Session::client_id);
+                if (it != viewers.end()) old_viewer = *it;  // Se reconecta: reemplaza su conexión anterior.
+            }
+        }
+        if (leader) {
+            if (old_viewer) {
+                old_viewer->channel->shutdown();
+                for (int i = 0; i < 150 && is_viewer(old_viewer); ++i) Sleep(20);
+            }
+            {
+                std::scoped_lock lock(mutex);
+                if (session != leader || !viewer_slot_free(client_id)) return;
+                s->spectator = true;
+                s->view_only = true;
+                viewers.push_back(s);
+            }
+            leader->media->add_mirror(s->media);
+            guard.release();
+            log::info("Espectador conectado: {} ({}), mira la sesión de {}", s->client_name, peer.ip_string(), leader->client_name);
+            run_viewer(*s, *leader);
+            leader->media->remove_mirror(s->media.get());
+            s->channel->shutdown();
+            {
+                std::scoped_lock lock(mutex);
+                std::erase(viewers, s);
+            }
+            log::info("Espectador {} desconectado", s->client_name);
+            return;
+        }
+
         // Reconexión del mismo equipo: cerrar la sesión anterior (quedó colgada por el corte de red).
         std::shared_ptr<Session> old;
         {
@@ -582,6 +641,7 @@ struct HostService::Impl {
     }
 
     void end_session(const std::shared_ptr<Session>& s) {
+        drop_viewers(std::format("{} terminó la sesión", s->client_name));
         if (s->second) s->second->stop();
         if (s->streamer) s->streamer->stop();
         s->audio.stop();
@@ -595,7 +655,8 @@ struct HostService::Impl {
         log::info("Sesión con {} terminada", s->client_name);
     }
 
-    void send_host_info(Session& s) {
+    // `controller`: para un espectador, quién tiene el control.
+    void send_host_info(Session& s, const std::string& controller = {}) {
         proto::HostInfo info;
         const HostSettings hs = host_settings();
         {
@@ -619,8 +680,10 @@ struct HostService::Impl {
         }
         info.audio_available = hs.allow_audio;
         info.input_allowed = hs.allow_input && !s.view_only;
-        info.clipboard_allowed = hs.allow_clipboard;
-        info.files_allowed = hs.allow_files;
+        info.clipboard_allowed = hs.allow_clipboard && !s.spectator;
+        info.files_allowed = hs.allow_files && !s.spectator;
+        info.spectator = s.spectator;
+        info.controller_name = controller;
         info.secure_desktop = service_mode;
         info.media_port = hs.media_port;
         info.file_port = static_cast<std::uint16_t>(hs.control_port + 1);
@@ -631,7 +694,7 @@ struct HostService::Impl {
                 info.encode_444_cms = static_cast<std::uint16_t>(std::clamp(calibration->ms_444 * 100.0, 0.0, 65535.0));
             }
         }
-        info.gamepad_available = hs.allow_input && gamepad::driver_available();
+        info.gamepad_available = hs.allow_input && !s.view_only && gamepad::driver_available();
         if (hs.allow_microphone && !s.view_only) {  // En "solo ver" no se habla por el micrófono.
             if (const auto dev = audio::virtual_mic_device(); dev && dev->default_output) {
                 // Lo que suena en la salida predeterminada se transmite al cliente: su voz volvería (eco).
@@ -743,6 +806,77 @@ struct HostService::Impl {
         s.second->configure(c, s.caps, 0, 0);
     }
 
+    // ---------------------------------------------------------------- espectadores
+    static constexpr std::size_t kMaxViewers = 4;
+
+    // ¿Puede entrar `client_id` como espectador? (con el mutex tomado)
+    bool viewer_slot_free(const std::string& client_id) const {
+        if (!settings.host.allow_viewers) return false;
+        const bool already = std::ranges::find(viewers, client_id, &Session::client_id) != viewers.end();
+        return already || viewers.size() < kMaxViewers;
+    }
+
+    bool is_viewer(const std::shared_ptr<Session>& v) {
+        std::scoped_lock lock(mutex);
+        return std::ranges::find(viewers, v) != viewers.end();
+    }
+
+    std::vector<std::shared_ptr<Session>> viewer_list() {
+        std::scoped_lock lock(mutex);
+        return viewers;
+    }
+
+    void to_viewers(const std::vector<std::uint8_t>& message) {
+        for (const auto& v : viewer_list()) v->channel->send(message);
+    }
+
+    void drop_viewers(const std::string& reason) {
+        for (const auto& v : viewer_list()) {
+            v->channel->send(proto::encode(proto::MsgType::Disconnect, proto::TextMessage{reason}));
+            v->channel->shutdown();
+        }
+    }
+
+    // Un espectador: recibe el stream de quien controla (copia de cada paquete con su clave). Sus pedidos de
+    // keyframe van al streamer principal; no controla, no cambia la calidad ni habla por el micrófono.
+    void run_viewer(Session& s, Session& leader) {
+        send_host_info(s, leader.client_name);
+        if (leader.streamer) {
+            if (const auto cur = leader.streamer->current()) s.channel->send(proto::encode(proto::MsgType::StreamStarted, *cur));
+        }
+        std::vector<std::uint8_t> msg;
+        while (running && s.channel->recv(msg, 1u * 1024 * 1024)) {
+            if (msg.empty()) continue;
+            const auto type = static_cast<proto::MsgType>(msg[0]);
+            ByteReader r({msg.data() + 1, msg.size() - 1});
+            switch (type) {
+                case proto::MsgType::RequestKeyframe: {
+                    const auto reason = r.remaining() >= 1 ? static_cast<proto::RecoveryReason>(r.u8())
+                                                           : proto::RecoveryReason::NeedKeyframe;
+                    const std::uint8_t index = r.remaining() >= 1 ? r.u8() : 0;
+                    if (index == 0 && leader.streamer) leader.streamer->request_recovery(reason);
+                    break;
+                }
+                case proto::MsgType::StreamConfig:
+                    // El espectador no elige la calidad: se le recuerda la del stream actual.
+                    if (leader.streamer) {
+                        if (const auto cur = leader.streamer->current()) s.channel->send(proto::encode(proto::MsgType::StreamStarted, *cur));
+                    }
+                    break;
+                case proto::MsgType::Ping:
+                    if (auto p = proto::PingPong::read(r)) {
+                        p->host_time_us = gpu::now_us();
+                        s.channel->send(proto::encode(proto::MsgType::Pong, *p));
+                    }
+                    break;
+                case proto::MsgType::Disconnect:
+                    return;
+                default:
+                    break;
+            }
+        }
+    }
+
     void run_session(Session& s) {
         send_host_info(s);
         const HostSettings hs = host_settings();
@@ -753,12 +887,24 @@ struct HostService::Impl {
         }
 
         Streamer::Callbacks cb;
-        cb.started = [&s](const proto::StreamStarted& info) { s.channel->send(proto::encode(proto::MsgType::StreamStarted, info)); };
+        cb.started = [this, &s](const proto::StreamStarted& info) {
+            const auto m = proto::encode(proto::MsgType::StreamStarted, info);
+            s.channel->send(m);
+            to_viewers(m);
+        };
         cb.error = [&s](const std::string& msg) {
             s.channel->send(proto::encode(proto::MsgType::StreamError, proto::TextMessage{msg}));
         };
-        cb.cursor_shape = [&s](const proto::CursorShape& shape) { s.channel->send(proto::encode(proto::MsgType::CursorShape, shape)); };
-        cb.cursor_pos = [&s](const proto::CursorPos& pos) { s.channel->send(proto::encode(proto::MsgType::CursorPos, pos)); };
+        cb.cursor_shape = [this, &s](const proto::CursorShape& shape) {
+            const auto m = proto::encode(proto::MsgType::CursorShape, shape);
+            s.channel->send(m);
+            to_viewers(m);
+        };
+        cb.cursor_pos = [this, &s](const proto::CursorPos& pos) {
+            const auto m = proto::encode(proto::MsgType::CursorPos, pos);
+            s.channel->send(m);
+            to_viewers(m);
+        };
         s.streamer = std::make_unique<Streamer>(*s.media, std::move(cb));
         s.pads.set_rumble_callback([&s](std::uint8_t index, std::uint8_t strong, std::uint8_t weak) {
             s.channel->send(proto::encode(proto::MsgType::GamepadRumble, proto::GamepadRumble{index, strong, weak}));
@@ -910,6 +1056,7 @@ Status HostService::status() const {
             if (!any_lan || a.has_gateway) st.addresses.push_back(net::Endpoint{a.ip, port}.ip_string());
         }
     }
+    for (const auto& v : impl_->viewer_list()) st.viewers.push_back(std::format("{} ({})", v->client_name, v->address.ip_string()));
     if (s) {
         st.session_active = true;
         st.client_name = s->client_name;
@@ -930,6 +1077,8 @@ void HostService::disconnect() {
         s->channel->shutdown();
     }
 }
+
+void HostService::disconnect_viewers() { impl_->drop_viewers("El host desconectó a los espectadores"); }
 
 void HostService::set_service_mode(bool service_mode) { impl_->service_mode = service_mode; }
 

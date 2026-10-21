@@ -519,6 +519,64 @@ TEST_F(EndToEnd, QualityPresetLatency) {
 }
 
 // FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+// Espectadores: mientras A controla, B entra a solo ver, recibe el mismo video y se va cuando A termina.
+TEST_F(EndToEnd, SpectatorWatchesWhileAnotherControls) {
+    const AppSettings host_settings = make_settings("Host-Esp", root_ / L"host-recv-esp");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    auto pair = [&](client::ClientSession& c, const char* name) {
+        c.connect({0x7F000001, kPort}, make_caps(name), make_config());
+        if (!wait_for([&] { return c.state() == client::State::NeedPin; }, 5000)) return false;
+        if (!wait_for([&] { return host.status().pin.has_value(); }, 2000)) return false;
+        c.submit_pin(*host.status().pin);
+        return wait_for([&] { return c.state() == client::State::Connected && c.stream() && c.host_info(); }, 8000);
+    };
+    client::ClientSession a(make_settings("Controla", root_ / L"a-recv-esp"));
+    ASSERT_TRUE(pair(a, "Controla")) << a.message();
+    EXPECT_FALSE(a.host_info()->spectator);
+    EXPECT_TRUE(a.host_info()->input_allowed);
+
+    client::ClientSession b(make_settings("Mira", root_ / L"b-recv-esp"));
+    ASSERT_TRUE(pair(b, "Mira")) << b.message();
+    EXPECT_TRUE(b.host_info()->spectator);
+    EXPECT_FALSE(b.host_info()->input_allowed) << "El espectador no controla";
+    EXPECT_FALSE(b.host_info()->mic_available) << "El espectador no habla";
+    EXPECT_EQ(b.host_info()->controller_name, "Controla");
+    EXPECT_EQ(b.stream()->epoch, a.stream()->epoch) << "Ve el mismo stream";
+    ASSERT_EQ(host.status().viewers.size(), 1u);
+
+    // Los dos reciben cuadros (el video se codifica una vez y se copia).
+    int frames_a = 0;
+    int frames_b = 0;
+    bool key_b = false;
+    const std::uint64_t until = gpu::now_us() + 4'000'000;
+    while (gpu::now_us() < until && (frames_a < 10 || frames_b < 10 || !key_b)) {
+        WaitForSingleObject(b.frame_event(), 20);
+        for (auto& f : a.take_frames()) {
+            a.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+            ++frames_a;
+        }
+        for (auto& f : b.take_frames()) {
+            b.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+            key_b = key_b || f.frame.info.keyframe;
+            ++frames_b;
+        }
+        if (frames_b == 0) b.request_keyframe();
+    }
+    std::printf("  Controla: %d cuadros · espectador: %d cuadros\n", frames_a, frames_b);
+    EXPECT_GE(frames_a, 10);
+    EXPECT_GE(frames_b, 10);
+    EXPECT_TRUE(key_b) << "El espectador recibe un keyframe para empezar";
+
+    // Cuando quien controla se va, el espectador también.
+    a.disconnect();
+    EXPECT_TRUE(wait_for([&] { return b.state() == client::State::Closed; }, 4000)) << b.message();
+    EXPECT_TRUE(wait_for([&] { return host.status().viewers.empty(); }, 3000));
+    b.disconnect();
+    host.stop();
+}
+
 // Micrófono: el host lo ofrece solo con un cable de audio virtual, y el cliente solo lo enciende si el host lo ofrece.
 TEST_F(EndToEnd, MicrophoneOnlyWhenHostHasVirtualCable) {
     const bool cable = audio::virtual_mic_device().has_value();

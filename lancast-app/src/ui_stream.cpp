@@ -122,6 +122,14 @@ void App::draw_stream_toolbar() {
                                                                stream->audio_channels == 1 ? "mono" : "estéreo").c_str()
                                                  : "apagado");
     }
+    // Espectador: otro equipo tiene el control; la calidad la elige quien controla.
+    if (const auto hi = session_->host_info(); hi && hi->spectator) {
+        const std::string who = hi->controller_name.empty() ? std::string{"Espectador"} : "Espectador · controla " + hi->controller_name;
+        place(ImGui::CalcTextSize(who.c_str()).x);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kWarn, "%s", who.c_str());
+        ImGui::SetItemTooltip("Solo ves y escuchas: el control, el micrófono y la calidad del stream son de quien controla.");
+    }
 
     // Resolución
     place(200 * scale_);

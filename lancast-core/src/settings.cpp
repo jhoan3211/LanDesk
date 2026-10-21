@@ -155,6 +155,7 @@ std::string settings_to_toml(const AppSettings& s) {
     h.set("allow_files", s.host.allow_files);
     h.set("allow_audio", s.host.allow_audio);
     h.set("allow_microphone", s.host.allow_microphone);
+    h.set("allow_viewers", s.host.allow_viewers);
     h.set("private_networks_only", s.host.private_networks_only);
     h.set("ip_whitelist", s.host.ip_whitelist);
     h.set("receive_folder", s.host.receive_folder);
@@ -213,6 +214,7 @@ AppSettings settings_from_toml(std::string_view text) {
         s.host.allow_files = h->get_bool("allow_files").value_or(s.host.allow_files);
         s.host.allow_audio = h->get_bool("allow_audio").value_or(s.host.allow_audio);
         s.host.allow_microphone = h->get_bool("allow_microphone").value_or(s.host.allow_microphone);
+        s.host.allow_viewers = h->get_bool("allow_viewers").value_or(s.host.allow_viewers);
         s.host.private_networks_only = h->get_bool("private_networks_only").value_or(s.host.private_networks_only);
         s.host.ip_whitelist = h->get_strings("ip_whitelist");
         s.host.receive_folder = h->get_string("receive_folder").value_or("");

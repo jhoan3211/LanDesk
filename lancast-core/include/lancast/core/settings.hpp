@@ -69,6 +69,7 @@ struct HostSettings {
     bool allow_clipboard = true;
     bool allow_files = true;
     bool allow_audio = true;
+    bool allow_viewers = true;  // Mientras alguien controla, otros pueden conectarse a solo ver (espectadores).
     bool allow_microphone = true;  // Recibir el micrófono del cliente (necesita un cable de audio virtual).
     bool private_networks_only = true;
     std::vector<std::string> ip_whitelist;  // Vacía = cualquier IP privada.
