@@ -91,11 +91,28 @@ void App::draw_stream_toolbar() {
     const auto info = session_->host_info();
     bool changed = false;
 
+    // La barra se acomoda al ancho de la ventana: en una fila si cabe y, si no (p. ej. a 1280x720 o en una ventana
+    // angosta), en las filas que hagan falta, sin cortar ni esconder ningún control.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float max_w = std::max(240.0f * scale_, ImGui::GetMainViewport()->Size.x - 2 * style.WindowPadding.x - 24.0f * scale_);
+    float row_w = -1.0f;
+    auto place = [&](float w) {
+        if (row_w >= 0 && row_w + style.ItemSpacing.x + w <= max_w) {
+            ImGui::SameLine();
+            row_w += style.ItemSpacing.x + w;
+        } else {
+            row_w = w;  // Primer control o fila nueva.
+        }
+    };
+    auto button_w = [&](const std::string& label) { return ImGui::CalcTextSize(label.c_str(), nullptr, true).x + style.FramePadding.x * 2; };
+
     ImGui::SetNextWindowPos(ImVec2(ImGui::GetMainViewport()->Size.x * 0.5f, 0), ImGuiCond_Always, ImVec2(0.5f, 0));
+    ImGui::SetNextWindowSizeConstraints(ImVec2(0, 0), ImVec2(max_w + 2 * style.WindowPadding.x, FLT_MAX));
     ImGui::SetNextWindowBgAlpha(0.92f);
     ImGui::Begin("##toolbar", nullptr,
                  ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings |
                      ImGuiWindowFlags_NoFocusOnAppearing | ImGuiWindowFlags_NoMove);
+    place(ImGui::CalcTextSize(session_->host_name().c_str()).x);
     ImGui::AlignTextToFramePadding();
     ImGui::TextColored(kAccent, "%s", session_->host_name().c_str());
     if (stream) {
@@ -107,7 +124,7 @@ void App::draw_stream_toolbar() {
     }
 
     // Resolución
-    ImGui::SameLine();
+    place(200 * scale_);
     const Size here = display_size();
     auto res_label = [&](ResolutionPreset r) {
         return r == ResolutionPreset::ClientNative ? std::format("Igual a esta pantalla ({}x{})", here.width, here.height)
@@ -127,7 +144,7 @@ void App::draw_stream_toolbar() {
     ImGui::SetItemTooltip("Resolución");
 
     // FPS
-    ImGui::SameLine();
+    place(110 * scale_);
     const std::uint32_t here_hz = display_hz();
     ImGui::SetNextItemWidth(110 * scale_);
     const std::string fps_label = s.fps_match_display ? std::format("{} fps (pantalla)", std::max(here_hz, 30u)) : std::format("{} fps", s.fps);
@@ -148,7 +165,7 @@ void App::draw_stream_toolbar() {
     ImGui::SetItemTooltip("Más FPS que los Hz de esta pantalla no se ven, pero cargan al codificador del host");
 
     // Monitor
-    ImGui::SameLine();
+    place(170 * scale_);
     ImGui::SetNextItemWidth(170 * scale_);
     const std::string mon = s.monitor_id == 0 ? std::string{"Todos los monitores"} : std::format("Monitor {}", s.monitor_id);
     if (ImGui::BeginCombo("##tmon", mon.c_str())) {
@@ -169,7 +186,7 @@ void App::draw_stream_toolbar() {
     }
 
     // Bitrate
-    ImGui::SameLine();
+    place(110 * scale_);
     ImGui::SetNextItemWidth(110 * scale_);
     const std::string br = s.auto_bitrate ? std::string{"Bitrate auto"} : std::format("{} Mbps", s.bitrate_mbps);
     if (ImGui::BeginCombo("##tbr", br.c_str())) {
@@ -188,7 +205,7 @@ void App::draw_stream_toolbar() {
     }
 
     // Códec
-    ImGui::SameLine();
+    place(110 * scale_);
     ImGui::SetNextItemWidth(110 * scale_);
     if (ImGui::BeginCombo("##tcodec", std::string{to_string(s.codec)}.c_str())) {
         for (int i = 0; i <= 3; ++i) {
@@ -202,7 +219,7 @@ void App::draw_stream_toolbar() {
     }
 
     // Audio
-    ImGui::SameLine();
+    place(140 * scale_);
     ImGui::SetNextItemWidth(140 * scale_);
     const std::string audio_label = !s.audio ? std::string{"Audio apagado"}
                                              : std::format("Audio {}", s.audio_sample_rate == 0 ? std::string{"sistema"}
@@ -236,31 +253,36 @@ void App::draw_stream_toolbar() {
         ImGui::EndCombo();
     }
 
-    ImGui::SameLine();
+    // Segunda ventana: un botón, una lista o nada (si el host tiene un solo monitor).
+    if (second_) {
+        place(button_w(std::format("Cerrar ventana del monitor {}", second_monitor_id_)));
+    } else if (info && info->monitors.size() >= 2 && !(stream && stream->monitor_id == 0)) {
+        place(190 * scale_);
+    }
     draw_second_window_controls();
-    ImGui::SameLine();
+    place(button_w("Latencia mínima"));
     if (primary_button("Latencia mínima")) apply_min_latency();
     ImGui::SetItemTooltip("FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa");
-    ImGui::SameLine();
+    place(button_w(show_stats_ ? "Ocultar estadísticas" : "Estadísticas"));
     if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) {
         show_stats_ = !show_stats_;
         settings_.client.show_stats = show_stats_;
         save_settings();
     }
-    ImGui::SameLine();
+    place(button_w(settings_.client.show_graphs ? "Ocultar gráficos" : "Gráficos"));
     if (ImGui::Button(settings_.client.show_graphs ? "Ocultar gráficos" : "Gráficos")) toggle_graphs();
     ImGui::SetItemTooltip("Gráficos en tiempo real: latencia por cuadro, bitrate, pérdidas, FPS y RTT (Ctrl+Alt+Shift+G)");
-    ImGui::SameLine();
+    place(button_w("Medir latencia"));
     if (ImGui::Button("Medir latencia")) {
         session_->start_latency_test();
         show_stats_ = true;
     }
     ImGui::SetItemTooltip("El host muestra un cuadro blanco/negro en la esquina y se mide cuánto tarda en verse aquí");
-    ImGui::SameLine();
+    place(button_w("Más opciones"));
     if (ImGui::Button("Más opciones")) show_menu_ = true;
-    ImGui::SameLine();
+    place(button_w(fullscreen_ ? "Ventana" : "Pantalla completa"));
     if (ImGui::Button(fullscreen_ ? "Ventana" : "Pantalla completa")) toggle_fullscreen();
-    ImGui::SameLine();
+    place(button_w("Desconectar"));
     if (danger_button("Desconectar")) PostMessageW(hwnd_, detail::kMsgClientDisconnect, 0, 0);
 
     if (ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows | ImGuiHoveredFlags_AllowWhenBlockedByPopup) ||

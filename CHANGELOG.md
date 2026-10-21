@@ -13,6 +13,9 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 - **Cliente de PC con un teléfono**: manda el texto ya traducido con la distribución de teclado de Windows (ñ, tildes con tecla muerta, @ con AltGr) y dibuja un puntero sobre la pantalla del teléfono.
 - **Cliente Android con un teléfono**: usa el toque directo (se toca donde se quiere tocar en el otro teléfono).
 
+### PC
+- **La barra superior del stream se acomoda al ancho**: en una fila si cabe y, si no (por ejemplo en una pantalla de 1280x720 o en una ventana angosta), en dos o más filas, sin cortar ni esconder ningún control.
+
 ### Si el router cambia la IP (DHCP)
 - **Ya no hay que volver a escribir la IP ni el PIN.** El emparejamiento siempre fue por el identificador del equipo, no por la IP. Ahora, si un equipo emparejado no responde en su IP de siempre (se le da 1,5 s), el cliente lo busca en la red por ese identificador, se conecta en la IP nueva sin PIN y la guarda. En el PC y en el teléfono. Probado: ~3 s la primera vez después del cambio.
 
