@@ -69,6 +69,23 @@ object Scancodes {
         else -> null
     }
 
+    // Carácter de una tecla (distribución de EE. UU.), para escribir en este teléfono cuando el que lo controla manda
+    // teclas en lugar de texto. null = no es un carácter.
+    fun charFor(sc: Int, shift: Boolean): Char? {
+        val rows = listOf(
+            0x02 to ("1234567890-=" to "!@#$%^&*()_+"),
+            0x10 to ("qwertyuiop[]" to "QWERTYUIOP{}"),
+            0x1E to ("asdfghjkl;'`" to "ASDFGHJKL:\"~"),
+            0x2B to ("\\zxcvbnm,./" to "|ZXCVBNM<>?"),
+        )
+        for ((base, chars) in rows) {
+            val i = sc - base
+            val set = if (shift) chars.second else chars.first
+            if (i in set.indices) return set[i]
+        }
+        return if (sc == 0x39) ' ' else null
+    }
+
     // Teclado físico (Bluetooth/USB): cada tecla por su posición, con pulsar y soltar por separado, así funcionan
     // atajos, juegos y la distribución de teclado que tenga el PC.
     fun forHardware(code: Int): K? {

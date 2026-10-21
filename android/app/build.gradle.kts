@@ -18,8 +18,8 @@ android {
         applicationId = "com.lancast.android"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.7.1"
+        versionCode = 5
+        versionName = "1.8.0"
     }
 
     signingConfigs {

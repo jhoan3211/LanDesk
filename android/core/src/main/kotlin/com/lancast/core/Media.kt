@@ -72,6 +72,9 @@ object Gf {
         for (i in 255 until 512) exp[i] = exp[i - 255]
     }
 
+    // Tabla de multiplicar por cada coeficiente (64 KB): el host la usa para calcular la paridad rápido.
+    val mulTable: Array<ByteArray> = Array(256) { c -> ByteArray(256) { x -> if (c == 0 || x == 0) 0 else exp[log[c] + log[x]].toByte() } }
+
     fun mul(a: Int, b: Int): Int = if (a == 0 || b == 0) 0 else exp[log[a] + log[b]]
     fun inv(a: Int): Int = if (a == 0) 0 else exp[255 - log[a]]
 
@@ -95,12 +98,18 @@ class ReedSolomon(private val k: Int, private val m: Int) {
 
     private fun coef(row: Int, col: Int) = matrix[row * k + col]
 
-    // Para pruebas: genera la paridad de un bloque (k + m fragmentos contiguos en `block`).
+    // Genera la paridad de un bloque (k + m fragmentos contiguos en `block`).
     fun encode(block: ByteArray, shardSize: Int) {
         for (i in 0 until m) {
             val off = (k + i) * shardSize
             java.util.Arrays.fill(block, off, off + shardSize, 0)
-            for (j in 0 until k) Gf.mulAdd(block, off, block, j * shardSize, coef(i, j), shardSize)
+            for (j in 0 until k) {
+                val c = coef(i, j)
+                if (c == 0) continue
+                val t = Gf.mulTable[c]
+                val src = j * shardSize
+                for (x in 0 until shardSize) block[off + x] = (block[off + x].toInt() xor t[block[src + x].toInt() and 0xFF].toInt()).toByte()
+            }
         }
     }
 

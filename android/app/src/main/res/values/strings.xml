@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LanCast</string>
+    <string name="control_name">LanCast: control remoto</string>
+    <string name="control_description">Deja que un PC u otro teléfono con LanCast controle este teléfono mientras compartes la pantalla: los clics se convierten en toques, la rueda desplaza y el teclado escribe en el campo de texto activo. Solo funciona con equipos que emparejaste con el PIN y mientras compartes la pantalla.</string>
 </resources>

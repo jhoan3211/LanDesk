@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <optional>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
@@ -192,6 +193,7 @@ private:
     bool mod_ctrl_[2] = {false, false};  // [izquierdo, derecho]
     bool mod_alt_[2] = {false, false};
     bool mod_shift_[2] = {false, false};
+    std::set<DWORD> typed_keys_;  // Teclas cuyo carácter ya se mandó como texto (host en un teléfono).
     std::string last_remote_clipboard_;
     std::array<proto::GamepadState, 4> pads_sent_{};  // Último estado enviado de cada mando (connected = presente).
     std::uint64_t pads_scan_us_ = 0;                   // Los huecos vacíos se revisan cada 2 s (XInput es lento ahí).

@@ -21,17 +21,29 @@ interface PairingStore {
     fun secret(hostId: String): ByteArray?
     fun save(hostId: String, name: String, address: String, secret: ByteArray)
     fun forget(hostId: String)
+    // Id del equipo emparejado que estaba en esa IP (para encontrarlo si el router le dio otra).
+    fun hostIdAt(address: String): String? = null
+    fun updateAddress(hostId: String, address: String) {}
 }
 
 class MemoryPairingStore : PairingStore {
     private val map = HashMap<String, ByteArray>()
+    private val addresses = HashMap<String, String>()
     override fun secret(hostId: String) = synchronized(map) { map[hostId] }
     override fun save(hostId: String, name: String, address: String, secret: ByteArray) {
-        synchronized(map) { map[hostId] = secret }
+        synchronized(map) {
+            map[hostId] = secret
+            addresses[hostId] = address
+        }
     }
 
     override fun forget(hostId: String) {
         synchronized(map) { map.remove(hostId) }
+    }
+
+    override fun hostIdAt(address: String) = synchronized(map) { addresses.entries.firstOrNull { it.value == address }?.key }
+    override fun updateAddress(hostId: String, address: String) {
+        synchronized(map) { addresses[hostId] = address }
     }
 }
 
@@ -78,6 +90,8 @@ class Session(
     private val deviceName: String,
     private val pairing: PairingStore,
     private val listener: SessionListener,
+    // Redes donde buscar a un equipo emparejado que cambió de IP (la app pasa las del Wi-Fi o el cable).
+    private val broadcast: () -> List<InetAddress> = { listOf(InetAddress.getByName("255.255.255.255")) },
 ) {
     @Volatile var hostName = ""
         private set
@@ -205,9 +219,22 @@ class Session(
         var reason = "Desconectado"
         var retryable = true
         try {
-            val sock = Socket()
+            // A un equipo emparejado se le da poco tiempo en su IP de siempre; si no responde, el router (DHCP) pudo
+            // haberle dado otra: se lo busca en la red por su id, que no cambia, y se entra sin PIN.
+            val pairedId = pairing.hostIdAt(host)
+            var sock = Socket()
             sock.tcpNoDelay = true
-            sock.connect(InetSocketAddress(host, port), 4000)
+            try {
+                sock.connect(InetSocketAddress(host, port), if (pairedId != null) 1500 else 4000)
+            } catch (e: Exception) {
+                if (pairedId == null || stopping.get()) throw e
+                val moved = (0 until 2).firstNotNullOfOrNull {
+                    runCatching { discover(1200, broadcast()) }.getOrDefault(emptyList()).firstOrNull { h -> h.deviceId == pairedId }
+                } ?: throw e
+                sock = Socket()
+                sock.tcpNoDelay = true
+                sock.connect(InetSocketAddress(moved.address, moved.controlPort), 4000)
+            }
             socket = sock
             hostAddress = sock.inetAddress
             output = sock.getOutputStream()
@@ -293,6 +320,7 @@ class Session(
         }
         val keys = SessionCrypto.deriveKeys(z, authKey, th)
         if (pinRequired) pairing.save(hostId, ack.deviceName, sock.inetAddress.hostAddress ?: "", keys.pairingSecret)
+        else pairing.updateAddress(hostId, sock.inetAddress.hostAddress ?: "")
         mediaRxKey = keys.mediaH2c
         mediaTxKey = keys.mediaC2h
         fileTxKey = keys.fileC2h

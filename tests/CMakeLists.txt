@@ -48,6 +48,13 @@ target_link_libraries(lancast-e2e-tests PRIVATE lancast::host lancast::client GT
 lancast_set_warnings(lancast-e2e-tests)
 gtest_discover_tests(lancast-e2e-tests PROPERTIES LABELS hardware DISCOVERY_TIMEOUT 30)
 
+# Cliente real (el del PC) para las pruebas del host del teléfono (android/core, Kotlin/JVM).
+add_executable(lancast-test-client
+    interop/test_client.cpp
+    ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
+target_link_libraries(lancast-test-client PRIVATE lancast::client)
+lancast_set_warnings(lancast-test-client)
+
 # Host real para las pruebas de interoperabilidad del cliente Android (android/core, Kotlin/JVM).
 add_executable(lancast-test-host
     interop/test_host.cpp
