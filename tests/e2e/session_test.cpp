@@ -519,6 +519,93 @@ TEST_F(EndToEnd, QualityPresetLatency) {
 }
 
 // FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+// Latencia real repetida (solo con LANCAST_BENCH=1, pinta el destello en pantalla): ¿por qué medir varias veces
+// seguidas da mejores resultados? Hace 5 mediciones seguidas y una después de 5 s en reposo, como el botón de la app:
+// el cliente decodifica cada cuadro y busca el color del marcador en la imagen.
+TEST_F(EndToEnd, BenchRepeatedRealLatency) {
+    if (GetEnvironmentVariableW(L"LANCAST_BENCH", nullptr, 0) == 0) GTEST_SKIP() << "LANCAST_BENCH=1";
+    host::HostService host;
+    host.start(make_settings("Host-Lat", root_ / L"host-recv-lat"));
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(make_settings("Cliente-Lat", root_ / L"client-recv-lat"));
+    proto::StreamConfig cfg = make_config();
+    cfg.max_width = 2560;
+    cfg.max_height = 1440;
+    cfg.fps = 165;
+    cfg.audio = false;
+    cfg.hdr = false;
+    cfg.chroma_444 = false;
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Lat"), cfg);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.stream(); }, 5000));
+
+    auto dev = gpu::create_device(std::nullopt);
+    ASSERT_TRUE(dev.has_value());
+    const auto st = *client.stream();
+    auto dec = mf::create_decoder(*dev, st.codec, Size{st.width, st.height});
+    ASSERT_TRUE(dec.has_value()) << dec.error().message();
+    gpu::ComPtr<ID3D11Texture2D> staging;
+    std::uint16_t epoch = st.epoch;
+
+    // Decodifica lo recibido; si hay medición en curso, mira el brillo del marcador en el último cuadro.
+    auto pump = [&](int ms) {
+        const std::uint64_t until = gpu::now_us() + static_cast<std::uint64_t>(ms) * 1000;
+        while (gpu::now_us() < until) {
+            WaitForSingleObject(client.frame_event(), 5);
+            std::optional<mf::DecodedFrame> last;
+            for (auto& f : client.take_frames()) {
+                const auto cur = client.stream();
+                if (cur && cur->epoch != epoch) {  // El stream se reconfiguró: decodificador nuevo.
+                    epoch = cur->epoch;
+                    if (auto d = mf::create_decoder(*dev, cur->codec, Size{cur->width, cur->height})) dec = std::move(d);
+                    staging.Reset();
+                }
+                if (auto out = (*dec)->decode(f.frame.data, f.frame.info.capture_time_us); out && out->has_value()) last = **out;
+                client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+            }
+            const auto target = client.latency_target();
+            if (!last || !target) continue;
+            D3D11_TEXTURE2D_DESC d{};
+            last->texture->GetDesc(&d);
+            if (!staging) {
+                d.ArraySize = 1;
+                d.BindFlags = 0;
+                d.MiscFlags = 0;
+                d.Usage = D3D11_USAGE_STAGING;
+                d.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+                if (FAILED(dev->device->CreateTexture2D(&d, nullptr, &staging))) continue;
+            }
+            dev->context->CopySubresourceRegion(staging.Get(), 0, 0, 0, 0, last->texture.Get(), last->subresource, nullptr);
+            D3D11_MAPPED_SUBRESOURCE m{};
+            if (FAILED(dev->context->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &m))) continue;
+            const auto x = static_cast<std::uint32_t>(target->x * static_cast<float>(last->size.width));
+            const auto y = static_cast<std::uint32_t>(target->y * static_cast<float>(last->size.height));
+            const std::uint8_t luma = static_cast<const std::uint8_t*>(m.pData)[static_cast<std::size_t>(y) * m.RowPitch + x];
+            dev->context->Unmap(staging.Get(), 0);
+            if ((target->white && luma > 180) || (!target->white && luma < 60)) client.latency_observed(gpu::now_us());
+        }
+    };
+    auto measure = [&](const char* label) {
+        client.start_latency_test();
+        const std::uint64_t t0 = gpu::now_us();
+        while (client.stats().latency_test_running && gpu::now_us() - t0 < 15'000'000) pump(50);
+        const auto s = client.stats();
+        std::printf("  %-34s promedio %5.1f ms · mín %5.1f · máx %5.1f (%d muestras, %.1f s)\n", label, s.real_latency_ms,
+                    s.real_latency_min_ms, s.real_latency_max_ms, s.latency_samples, static_cast<double>(gpu::now_us() - t0) / 1e6);
+    };
+    pump(1500);
+    for (int i = 1; i <= 5; ++i) {
+        measure(std::format("Medición {} (seguidas)", i).c_str());
+        pump(300);
+    }
+    pump(5000);
+    measure("Después de 5 s en reposo");
+    client.disconnect();
+    host.stop();
+}
+
 // Puerto ocupado al arrancar (la instancia anterior todavía se está cerrando): el host reintenta y escucha
 // en cuanto se libera.
 TEST_F(EndToEnd, HostRetriesWhenPortBusy) {

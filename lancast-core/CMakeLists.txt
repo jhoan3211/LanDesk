@@ -16,5 +16,7 @@ add_library(lancast_core STATIC
 add_library(lancast::core ALIAS lancast_core)
 
 target_include_directories(lancast_core PUBLIC include)
-target_compile_definitions(lancast_core PUBLIC LANCAST_VERSION="${PROJECT_VERSION}")
+target_compile_definitions(lancast_core PUBLIC LANCAST_VERSION="${PROJECT_VERSION}"
+    LANCAST_VERSION_MAJOR=${PROJECT_VERSION_MAJOR} LANCAST_VERSION_MINOR=${PROJECT_VERSION_MINOR}
+    LANCAST_VERSION_PATCH=${PROJECT_VERSION_PATCH})
 lancast_set_warnings(lancast_core)

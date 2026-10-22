@@ -48,7 +48,10 @@ public:
     }
 
 private:
+    void wait_gpu();
+
     const gpu::Device& device_;
+    gpu::ComPtr<ID3D11Query> done_;
     std::unique_ptr<mf::Decoder> decoder_;
     std::uint16_t epoch_ = 0xFFFF;
     Codec codec_ = Codec::H264;

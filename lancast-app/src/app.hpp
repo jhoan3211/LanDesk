@@ -120,6 +120,8 @@ private:
     void draw_settings_page();
     void draw_diagnostics_page();
     std::filesystem::path write_support_file();
+    void write_live_stats();  // estadisticas.json / .csv en la carpeta de datos (live_stats.cpp).
+    std::uint64_t live_stats_us_ = 0;
     void draw_stream_overlay();
     void draw_stats_overlay();
     void draw_graphs();

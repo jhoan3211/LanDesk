@@ -46,7 +46,7 @@ struct Stats {
     // Medición de latencia real (captura en el host -> imagen dibujada en el cliente).
     bool latency_test_running = false;
     int latency_samples = 0;
-    double real_latency_ms = 0;      // Mediana de la última medición.
+    double real_latency_ms = 0;      // Promedio de la última medición (estable aunque las muestras caigan en dos grupos).
     double real_latency_min_ms = 0;
     double real_latency_max_ms = 0;
 };
@@ -156,7 +156,10 @@ public:
     [[nodiscard]] std::vector<NetSample> net_history() const;
 
     // Medición de latencia real: el host alterna un marcador blanco/negro y el cliente detecta el cambio.
-    void start_latency_test(int samples = 10);
+    // Las muestras se toman con una pausa al azar entre una y otra: si cada destello se pidiera apenas se ve el
+    // anterior, todas caerían en el mismo momento del ciclo de captura del host y del refresco (muestras repetidas,
+    // y cada medición daría ~20 o ~32 ms según la suerte).
+    void start_latency_test(int samples = 30);
     [[nodiscard]] std::optional<LatencyTarget> latency_target() const;
     void latency_observed(std::uint64_t present_us);  // La interfaz vio el color esperado en pantalla.
     void set_simulated_loss(std::uint32_t percent) noexcept { simulated_loss_ = percent; }
@@ -274,6 +277,8 @@ private:
     bool latency_white_ = false;
     std::optional<proto::LatencyMark> latency_mark_;
     std::uint64_t latency_probe_sent_us_ = 0;
+    std::uint64_t latency_next_probe_us_ = 0;  // Próximo destello (0 = ninguno pendiente).
+    std::uint32_t latency_rng_ = 0x9E3779B9u;
     std::vector<double> latency_samples_;
     int latency_failures_ = 0;
 

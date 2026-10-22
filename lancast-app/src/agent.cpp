@@ -10,6 +10,7 @@
 #include <format>
 #include <string>
 
+#include "app_internal.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/core/version.hpp"
 #include "lancast/host/host_service.hpp"
@@ -153,6 +154,7 @@ int run_agent() {
                 DispatchMessageW(&msg);
             }
             const auto st = host.status();
+            write_service_host_stats(st);
             if (st.pin) {
                 popup.show(*st.pin, st.pin_requester.empty() ? std::string{"Un equipo"} : st.pin_requester);
             } else {

@@ -768,13 +768,18 @@ void ClientSession::media_thread() {
             send_message(proto::encode(proto::MsgType::Ping, proto::PingPong{gpu::now_us(), 0}));
             last_ping = now;
         }
-        // Medición de latencia: si la sonda expiró (marca de reintento), mandar otra o rendirse.
+        // Medición de latencia: siguiente destello cuando pasó su pausa; si la sonda expiró, mandar otra o rendirse.
         bool retry = false;
         bool give_up = false;
         {
             std::scoped_lock lock(mutex_);
+            if (latency_running_ && latency_next_probe_us_ != 0 && now >= latency_next_probe_us_) {
+                latency_next_probe_us_ = 0;
+                retry = true;
+                latency_probe_sent_us_ = now;  // Evita contarla como expirada antes de enviarla.
+            }
             // Si el cambio no se ve en 1 s (marcador tapado, otro monitor...), se reintenta.
-            if (latency_running_ && static_cast<std::int64_t>(now - latency_probe_sent_us_) > 1'000'000) {
+            if (latency_running_ && latency_next_probe_us_ == 0 && static_cast<std::int64_t>(now - latency_probe_sent_us_) > 1'000'000) {
                 give_up = ++latency_failures_ > 5;
                 retry = !give_up;
             }
@@ -1031,6 +1036,8 @@ void ClientSession::start_latency_test(int samples) {
         latency_wanted_ = samples;
         latency_samples_.clear();
         latency_failures_ = 0;
+        latency_next_probe_us_ = 0;
+        latency_rng_ ^= static_cast<std::uint32_t>(gpu::now_us());
         stats_.latency_test_running = true;
         stats_.latency_samples = 0;
     }
@@ -1068,12 +1075,13 @@ void ClientSession::latency_observed(std::uint64_t present_us) {
         latency_mark_.reset();
         stats_.latency_samples = static_cast<int>(latency_samples_.size());
         done = static_cast<int>(latency_samples_.size()) >= latency_wanted_;
+        if (!done) {
+            // Pausa al azar de 10 a 60 ms (varios ciclos de captura y de refresco): cada muestra cae en otro momento.
+            latency_rng_ = latency_rng_ * 1664525u + 1013904223u;
+            latency_next_probe_us_ = gpu::now_us() + 10'000 + (latency_rng_ >> 8) % 50'000;
+        }
     }
-    if (done) {
-        finish_latency_test();
-    } else {
-        send_next_probe();
-    }
+    if (done) finish_latency_test();
 }
 
 void ClientSession::finish_latency_test() {
@@ -1084,7 +1092,9 @@ void ClientSession::finish_latency_test() {
         if (!latency_samples_.empty()) {
             std::vector<double> v = latency_samples_;
             std::ranges::sort(v);
-            stats_.real_latency_ms = v[v.size() / 2];
+            double sum = 0;
+            for (const double x : v) sum += x;
+            stats_.real_latency_ms = sum / static_cast<double>(v.size());
             stats_.real_latency_min_ms = v.front();
             stats_.real_latency_max_ms = v.back();
         }

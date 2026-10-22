@@ -446,10 +446,10 @@ void App::draw_stats_overlay() {
         if (!presentation_direct_) ImGui::TextColored(kMuted, "  Pantalla completa (Ctrl+Alt+Shift+F) quita ese frame extra");
     }
     if (s.latency_test_running) {
-        ImGui::TextColored(kAccent, "Midiendo latencia real… %d/10", s.latency_samples);
+        ImGui::TextColored(kAccent, "Midiendo latencia real… %d/30", s.latency_samples);
     } else if (s.real_latency_ms > 0) {
         const ImVec4 c = s.real_latency_ms < 15 ? kGood : s.real_latency_ms < 30 ? kWarn : kBad;
-        ImGui::TextColored(c, "Latencia real medida: %.1f ms (%.1f–%.1f)", s.real_latency_ms, s.real_latency_min_ms,
+        ImGui::TextColored(c, "Latencia real medida: %.1f ms promedio (%.1f–%.1f)", s.real_latency_ms, s.real_latency_min_ms,
                            s.real_latency_max_ms);
     }
     const ImVec4 total_color = s.total_ms < 10 ? kGood : s.total_ms < 25 ? kWarn : kBad;

@@ -27,6 +27,7 @@ add_executable(lancast WIN32
     src/ui_pages.cpp
     src/ui_stream.cpp
     src/renderer.cpp
+    src/live_stats.cpp
     src/second_window.cpp
     src/app_service.cpp
     src/agent.cpp
