@@ -10,6 +10,7 @@
 #include <fstream>
 
 #include "app.hpp"
+#include "app_internal.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/json_writer.hpp"
 #include "lancast/core/log.hpp"
@@ -28,6 +29,46 @@ std::string local_time_string() {
 }
 
 double round2(double v) { return static_cast<double>(static_cast<std::int64_t>(v * 100.0 + (v >= 0 ? 0.5 : -0.5))) / 100.0; }
+
+void host_stats_json(JsonWriter& j, const host::Status& hs) {
+    j.field("escuchando", hs.listening);
+    if (!hs.error.empty()) j.field("error", hs.error);
+    j.field("sesion_activa", hs.session_active);
+    if (hs.session_active) {
+        j.field("cliente", hs.client_name).field("ip_cliente", hs.client_address);
+        j.field("codificador", hs.encoder_name);
+        if (hs.stream) {
+            j.field("codec", std::string{to_string(hs.stream->codec)});
+            j.field("ancho", hs.stream->width).field("alto", hs.stream->height).field("fps", hs.stream->fps);
+            j.field("bitrate_kbps", hs.stream->bitrate_kbps);
+        }
+        j.field("fps_enviados", round2(hs.stats.fps));
+        j.field("mbps_enviados", round2(hs.stats.bitrate_mbps));
+        j.field("captura_a_codificado_ms", round2(hs.stats.capture_to_encoded_ms));
+        j.field("espera_captura_ms", round2(hs.stats.capture_wait_ms));
+        j.field("conversion_y_codificacion_ms", round2(hs.stats.encode_ms));
+        j.field("cuadros_saltados_pct", round2(hs.stats.skipped_percent));
+        j.key("espectadores").begin_array();
+        for (const auto& v : hs.viewers) j.value(v);
+        j.end_array();
+    }
+    if (hs.encode_420_ms > 0) {
+        j.field("calibracion", std::format("{}x{}: {:.2f} ms (4:4:4 {:.2f} ms)", hs.calibrated_size.width, hs.calibrated_size.height,
+                                           hs.encode_420_ms, hs.encode_444_ms));
+    }
+}
+
+// Escritura atómica: quien lea nunca ve un archivo a medias.
+void write_atomic(const std::filesystem::path& path, const std::string& text) {
+    auto tmp = path;
+    tmp += L".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        out << text;
+        if (!out) return;
+    }
+    MoveFileExW(tmp.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING);
+}
 
 }  // namespace
 
@@ -141,45 +182,45 @@ void App::write_live_stats() {
     }
     j.end_object();
 
-    // ---- Este equipo como host
-    const host::Status hs = host_.status();
+    // ---- Este equipo como host (con el servicio instalado, lo escribe el servicio: ver service_stats_dir()).
     j.key("host").begin_object();
-    j.field("escuchando", hs.listening);
-    if (!hs.error.empty()) j.field("error", hs.error);
-    j.field("sesion_activa", hs.session_active);
-    if (hs.session_active) {
-        j.field("cliente", hs.client_name).field("ip_cliente", hs.client_address);
-        j.field("codificador", hs.encoder_name);
-        if (hs.stream) {
-            j.field("codec", std::string{to_string(hs.stream->codec)});
-            j.field("ancho", hs.stream->width).field("alto", hs.stream->height).field("fps", hs.stream->fps);
-            j.field("bitrate_kbps", hs.stream->bitrate_kbps);
-        }
-        j.field("fps_enviados", round2(hs.stats.fps));
-        j.field("mbps_enviados", round2(hs.stats.bitrate_mbps));
-        j.field("captura_a_codificado_ms", round2(hs.stats.capture_to_encoded_ms));
-        j.field("espera_captura_ms", round2(hs.stats.capture_wait_ms));
-        j.field("conversion_y_codificacion_ms", round2(hs.stats.encode_ms));
-        j.field("cuadros_saltados_pct", round2(hs.stats.skipped_percent));
-        j.key("espectadores").begin_array();
-        for (const auto& v : hs.viewers) j.value(v);
-        j.end_array();
-    }
-    if (hs.encode_420_ms > 0) {
-        j.field("calibracion", std::format("{}x{}: {:.2f} ms (4:4:4 {:.2f} ms)", hs.calibrated_size.width, hs.calibrated_size.height,
-                                           hs.encode_420_ms, hs.encode_444_ms));
+    if (service_host_) {
+        j.field("en_servicio", true);
+        j.field("ver", detail::narrow((service_stats_dir() / L"estadisticas-host.json").wstring()));
+    } else {
+        host_stats_json(j, host_.status());
     }
     j.end_object();
     j.end_object();
 
-    // Escritura atómica: quien lea nunca ve un archivo a medias.
-    const auto tmp = dir / L"estadisticas.json.tmp";
-    {
-        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
-        out << j.str();
-        if (!out) return;
-    }
-    MoveFileExW(tmp.c_str(), (dir / L"estadisticas.json").c_str(), MOVEFILE_REPLACE_EXISTING);
+    write_atomic(dir / L"estadisticas.json", j.str());
+}
+
+// Estado del host en el servicio (agente): su carpeta de datos está protegida, así que escribe en una aparte que
+// cualquier usuario del equipo puede leer (solo estadísticas, nada secreto).
+std::filesystem::path service_stats_dir() {
+    wchar_t buf[MAX_PATH]{};
+    const DWORD n = GetEnvironmentVariableW(L"ProgramData", buf, MAX_PATH);
+    return std::filesystem::path{n > 0 ? buf : L"C:\\ProgramData"} / L"LanCast-estadisticas";
+}
+
+void write_service_host_stats(const host::Status& hs) {
+    static std::uint64_t last = 0;
+    const std::uint64_t now = gpu::now_us();
+    if (now - last < (hs.session_active ? 1'000'000u : 5'000'000u)) return;
+    last = now;
+    const auto dir = service_stats_dir();
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    JsonWriter j;
+    j.begin_object();
+    j.field("hora", local_time_string());
+    j.field("version", std::string{kAppVersion});
+    j.key("host").begin_object();
+    host_stats_json(j, hs);
+    j.end_object();
+    j.end_object();
+    write_atomic(dir / L"estadisticas-host.json", j.str());
 }
 
 }  // namespace lancast::app

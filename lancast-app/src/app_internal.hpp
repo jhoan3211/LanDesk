@@ -6,6 +6,9 @@
 
 #include <string>
 #include <string_view>
+#include <filesystem>
+
+#include "lancast/host/host_service.hpp"
 
 namespace lancast::app {
 
@@ -23,6 +26,13 @@ extern App* g_app;
 
 std::wstring widen(std::string_view s);
 std::string narrow(std::wstring_view w);
+}  // namespace detail
+
+// Estadísticas del host en modo servicio (live_stats.cpp): carpeta legible por cualquier usuario del equipo.
+std::filesystem::path service_stats_dir();
+void write_service_host_stats(const host::Status& hs);
+
+namespace detail {
 
 LRESULT CALLBACK main_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
 LRESULT CALLBACK keyboard_proc(int code, WPARAM wp, LPARAM lp);
