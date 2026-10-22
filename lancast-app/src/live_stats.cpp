@@ -6,8 +6,10 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <format>
 #include <fstream>
+#include <vector>
 
 #include "app.hpp"
 #include "app_internal.hpp"
@@ -48,6 +50,13 @@ void host_stats_json(JsonWriter& j, const host::Status& hs) {
         j.field("espera_captura_ms", round2(hs.stats.capture_wait_ms));
         j.field("conversion_y_codificacion_ms", round2(hs.stats.encode_ms));
         j.field("cuadros_saltados_pct", round2(hs.stats.skipped_percent));
+        j.key("picos_ultimo_segundo").begin_object();
+        j.field("captura_a_codificado_max_ms", round2(hs.stats.capture_to_encoded_max_ms));
+        j.field("espera_captura_max_ms", round2(hs.stats.capture_wait_max_ms));
+        j.field("conversion_y_codificacion_max_ms", round2(hs.stats.encode_max_ms));
+        j.field("keyframes", hs.stats.keyframes_last_second);
+        j.field("el_mas_lento_fue_keyframe", hs.stats.slowest_was_keyframe);
+        j.end_object();
         j.key("espectadores").begin_array();
         for (const auto& v : hs.viewers) j.value(v);
         j.end_array();
@@ -57,6 +66,31 @@ void host_stats_json(JsonWriter& j, const host::Status& hs) {
                                            hs.encode_420_ms, hs.encode_444_ms));
     }
 }
+
+// Máximo y p95 de cada parte de los cuadros del último segundo.
+struct Peaks {
+    std::vector<float> host, net, dec, total;
+    std::uint32_t keyframes = 0;
+    bool slowest_host_key = false;
+    float slowest_host = 0;
+    void add(const client::FrameSample& f) {
+        host.push_back(f.encode_ms);
+        net.push_back(f.network_ms);
+        dec.push_back(f.decode_ms);
+        total.push_back(f.total_ms);
+        if (f.keyframe) ++keyframes;
+        if (f.encode_ms > slowest_host) {
+            slowest_host = f.encode_ms;
+            slowest_host_key = f.keyframe;
+        }
+    }
+    static double max(const std::vector<float>& v) { return v.empty() ? 0.0 : *std::ranges::max_element(v); }
+    static double p95(std::vector<float> v) {
+        if (v.empty()) return 0.0;
+        std::ranges::sort(v);
+        return v[std::min(v.size() - 1, v.size() * 95 / 100)];
+    }
+};
 
 // Escritura atómica: quien lea nunca ve un archivo a medias.
 void write_atomic(const std::filesystem::path& path, const std::string& text) {
@@ -136,6 +170,22 @@ void App::write_live_stats() {
         j.field("keyframes_pedidos", s.keyframe_requests);
         j.field("audio_bufer_ms", round2(s.audio_buffer_ms));
         j.end_object();
+        // Picos del último segundo por cuadro (los promedios los esconden).
+        const auto frames = session_->frame_history();
+        Peaks pk;
+        for (const auto& f : frames) {
+            if (now - f.time_us > 1'000'000) continue;
+            pk.add(f);
+        }
+        j.key("picos_ultimo_segundo").begin_object();
+        j.field("cuadros", static_cast<std::uint64_t>(pk.host.size()));
+        j.field("host_max_ms", round2(pk.max(pk.host))).field("host_p95_ms", round2(pk.p95(pk.host)));
+        j.field("red_max_ms", round2(pk.max(pk.net))).field("red_p95_ms", round2(pk.p95(pk.net)));
+        j.field("decodificacion_max_ms", round2(pk.max(pk.dec))).field("total_max_ms", round2(pk.max(pk.total)));
+        j.field("total_p95_ms", round2(pk.p95(pk.total)));
+        j.field("keyframes", pk.keyframes);
+        j.field("el_mas_lento_en_host_fue_keyframe", pk.slowest_host_key);
+        j.end_object();
         j.key("latencia_real").begin_object();
         j.field("midiendo", s.latency_test_running);
         j.field("muestras", s.latency_samples);
@@ -171,13 +221,13 @@ void App::write_live_stats() {
             const bool fresh = !std::filesystem::exists(csv, ec);
             std::ofstream out(csv, std::ios::app | std::ios::binary);
             if (fresh) {
-                out << "hora,fps,mbps,host_ms,red_ms,decodificacion_ms,presentacion_ms,total_ms,rtt_ms,perdida_pct,fec_pct,"
-                       "reparados,perdidos,latencia_real_ms\r\n";
+                out << "hora,fps,mbps,host_ms,host_max_ms,red_ms,red_max_ms,decodificacion_ms,presentacion_ms,total_ms,total_max_ms,"
+                       "keyframes,rtt_ms,perdida_pct,fec_pct,reparados,perdidos,latencia_real_ms\r\n";
             }
-            out << std::format("{},{:.1f},{:.1f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{},{},{},{:.1f}\r\n",
-                               local_time_string(), s.fps, s.bitrate_mbps, s.encode_ms, s.network_ms, s.decode_ms, s.present_ms,
-                               s.total_ms, s.rtt_ms, s.packet_loss_pct, session_->current_fec(), s.frames_recovered,
-                               s.frames_lost, s.real_latency_ms);
+            out << std::format("{},{:.1f},{:.1f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{:.2f},{},{:.2f},{:.2f},{},{},{},{:.1f}\r\n",
+                               local_time_string(), s.fps, s.bitrate_mbps, s.encode_ms, pk.max(pk.host), s.network_ms,
+                               pk.max(pk.net), s.decode_ms, s.present_ms, s.total_ms, pk.max(pk.total), pk.keyframes, s.rtt_ms,
+                               s.packet_loss_pct, session_->current_fec(), s.frames_recovered, s.frames_lost, s.real_latency_ms);
         }
     }
     j.end_object();

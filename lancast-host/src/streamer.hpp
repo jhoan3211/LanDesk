@@ -102,6 +102,11 @@ private:
     double window_latency_ms_ = 0;
     double window_wait_ms_ = 0;
     double window_encode_ms_ = 0;
+    double window_latency_max_ = 0;
+    double window_wait_max_ = 0;
+    double window_encode_max_ = 0;
+    std::uint32_t window_keyframes_ = 0;
+    bool window_slowest_key_ = false;
 
     // Tubería: el hilo de captura/codificación entrega frames y este hilo los paquetiza, cifra y envía.
     std::thread send_thread_;
