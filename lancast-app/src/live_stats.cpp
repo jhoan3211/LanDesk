@@ -139,7 +139,7 @@ void App::write_live_stats() {
         j.key("latencia_real").begin_object();
         j.field("midiendo", s.latency_test_running);
         j.field("muestras", s.latency_samples);
-        j.field("mediana_ms", round2(s.real_latency_ms));
+        j.field("promedio_ms", round2(s.real_latency_ms));
         j.field("min_ms", round2(s.real_latency_min_ms));
         j.field("max_ms", round2(s.real_latency_max_ms));
         j.end_object();
