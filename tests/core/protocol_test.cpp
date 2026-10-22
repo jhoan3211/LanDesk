@@ -189,7 +189,7 @@ TEST(Protocol, HostInfoSecureDesktopIsOptional) {
     ByteWriter w;
     h.write(w);
     std::vector<std::uint8_t> old_bytes = w.take();
-    old_bytes.resize(old_bytes.size() - 1 - 7 - 1);  // Sin secure_desktop (1.3), MAC/mando (1.7) ni plataforma (1.8).
+    old_bytes.resize(old_bytes.size() - 1 - 7 - 1 - 4 - 1 - 5);  // Sin secure_desktop (1.3), MAC/mando (1.7), plataforma (1.8), calibración, micrófono ni espectador (1.9).
     ByteReader r(old_bytes);
     const auto out = HostInfo::read(r);
     ASSERT_TRUE(out.has_value());
@@ -278,6 +278,33 @@ TEST(Protocol, ColorFeaturesAreOptional) {
     }
 }
 
+TEST(Protocol, HostInfoSpectator) {
+    HostInfo h;
+    h.host_name = "PC";
+    h.spectator = true;
+    h.controller_name = "Portátil de Ana";
+    ByteWriter w;
+    h.write(w);
+    ByteReader r(w.data());
+    const auto back = HostInfo::read(r);
+    ASSERT_TRUE(back.has_value());
+    EXPECT_TRUE(back->spectator);
+    EXPECT_EQ(back->controller_name, "Portátil de Ana");
+}
+
+TEST(Protocol, GamepadRumble) {
+    const GamepadRumble g{3, 255, 17};
+    ByteWriter w;
+    g.write(w);
+    ByteReader r(w.data());
+    EXPECT_EQ(GamepadRumble::read(r), g);
+    // Índice fuera de rango: se descarta.
+    ByteWriter bad;
+    GamepadRumble{4, 1, 1}.write(bad);
+    ByteReader rb(bad.data());
+    EXPECT_FALSE(GamepadRumble::read(rb).has_value());
+}
+
 TEST(Protocol, GamepadAndWakeOnLanFields) {
     GamepadState g;
     g.index = 2;
@@ -301,13 +328,15 @@ TEST(Protocol, GamepadAndWakeOnLanFields) {
     h.host_name = "PC";
     h.mac = {0x10, 0x20, 0x30, 0x40, 0x50, 0x60};
     h.gamepad_available = true;
+    h.mic_available = true;
     const HostInfo hb = roundtrip(h);
     EXPECT_EQ(hb.mac, h.mac);
     EXPECT_TRUE(hb.gamepad_available);
+    EXPECT_TRUE(hb.mic_available);
     ByteWriter hw;
     h.write(hw);
     std::vector<std::uint8_t> old = hw.take();
-    old.resize(old.size() - 7 - 1);  // Sin MAC/mando (1.7) ni plataforma (1.8).
+    old.resize(old.size() - 7 - 1 - 4 - 1 - 5);  // Sin MAC/mando (1.7), plataforma (1.8), calibración, micrófono ni espectador (1.9).
     ByteReader hr(old);
     const auto ho = HostInfo::read(hr);
     ASSERT_TRUE(ho.has_value());

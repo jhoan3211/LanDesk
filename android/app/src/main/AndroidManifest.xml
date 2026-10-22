@@ -6,6 +6,7 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <!-- Wi-Fi de baja latencia mientras se transmite (WifiManager.WIFI_MODE_FULL_LOW_LATENCY). -->
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Actualizar la app con la versión publicada en GitHub (Android pide confirmación). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Compartir la pantalla de este teléfono (servicio en primer plano de captura, audio de las apps y aviso). -->

@@ -126,6 +126,9 @@ void HostInfo::write(ByteWriter& w) const {
     w.boolean(secure_desktop);
     w.raw(mac).boolean(gamepad_available);
     w.u8(platform);
+    w.u16(encode_420_cms).u16(encode_444_cms);
+    w.boolean(mic_available);
+    w.boolean(spectator).str(controller_name);
 }
 
 std::optional<HostInfo> HostInfo::read(ByteReader& r) {
@@ -155,6 +158,15 @@ std::optional<HostInfo> HostInfo::read(ByteReader& r) {
         h.gamepad_available = r.boolean();
     }
     if (r.remaining() >= 1) h.platform = r.u8();
+    if (r.remaining() >= 4) {
+        h.encode_420_cms = r.u16();
+        h.encode_444_cms = r.u16();
+    }
+    if (r.remaining() >= 1) h.mic_available = r.boolean();
+    if (r.remaining() >= 1) {
+        h.spectator = r.boolean();
+        h.controller_name = r.str(256);
+    }
     return finish(r, std::move(h));
 }
 

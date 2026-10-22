@@ -8,6 +8,7 @@
 #include <fstream>
 
 #include "lancast/platform/crash.hpp"
+#include "lancast/platform/net.hpp"
 #include "lancast/platform/signature.hpp"
 
 namespace fs = std::filesystem;
@@ -46,4 +47,15 @@ TEST(CrashDumps, ListsNewestFirstAndRemembersSeen) {
     fs::last_write_time(dir / L"c.dmp", fs::file_time_type::clock::now() + std::chrono::seconds(5));
     EXPECT_EQ(lancast::crash::unseen(dir)->filename(), L"c.dmp");
     fs::remove_all(dir);
+}
+
+TEST(WakeOnLan, RejectsInvalidMacsAndSendsValidOnes) {
+    lancast::net::WinsockScope winsock;
+    EXPECT_FALSE(lancast::net::wake_on_lan(""));
+    EXPECT_FALSE(lancast::net::wake_on_lan("00:00:00:00:00:00"));
+    EXPECT_FALSE(lancast::net::wake_on_lan("zz:11:22:33:44:55"));
+    EXPECT_FALSE(lancast::net::wake_on_lan("11:22:33:44:55"));
+    // Una MAC de documentación: el paquete sale por broadcast (nadie la tiene).
+    EXPECT_TRUE(lancast::net::wake_on_lan("02:00:5e:10:00:01"));
+    EXPECT_TRUE(lancast::net::wake_on_lan("02-00-5E-10-00-01", 0x7F000001));
 }

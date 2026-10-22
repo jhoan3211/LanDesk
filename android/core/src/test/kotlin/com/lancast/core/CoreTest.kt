@@ -11,6 +11,34 @@ import kotlin.test.assertTrue
 
 class CoreTest {
     @Test
+    fun lossMeterIgnoresReorderAndCountsLoss() {
+        val m = LossMeter(64)
+        val order = (1L..1000L).toMutableList()
+        for (i in 10 until order.size - 10 step 20) order[i] = order[i + 10].also { order[i + 10] = order[i] }
+        order.forEach { m.received(it) }
+        assertEquals(0.0, m.takePercent(), 0.0)
+        val rng = java.util.Random(3)
+        var dropped = 0
+        var total = 0
+        for (s in 1001L..21_000L) {
+            if (s <= 20_900 && rng.nextInt(100) < 5) {
+                dropped++
+                continue
+            }
+            m.received(s)
+        }
+        total = (21_000 - 64 - 1000).toInt()
+        assertEquals(dropped * 100.0 / total, m.takePercent(), 0.3)
+    }
+
+    @Test
+    fun gamepadRumbleMatchesHostLayout() {
+        assertEquals(GamepadRumble(3, 255, 17), GamepadRumble.read(ByteReader(ByteWriter().u8(3).u8(255).u8(17).toByteArray())))
+        assertEquals(null, GamepadRumble.read(ByteReader(ByteWriter().u8(4).u8(1).u8(1).toByteArray())))
+        assertEquals(null, GamepadRumble.read(ByteReader(ByteWriter().u8(1).u8(1).toByteArray())))
+    }
+
+    @Test
     fun bytesAreLittleEndian() {
         val w = ByteWriter().u8(1).u16(0x0203).u32(0x04050607).u64(0x08090A0B0C0D0E0FL).str("ñ").f32(1.5f)
         val b = w.toByteArray()

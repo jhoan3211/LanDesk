@@ -1,10 +1,12 @@
 package com.lancast.android
 
+import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.content.Intent
 import android.graphics.RectF
 import android.net.wifi.WifiManager
@@ -44,6 +46,7 @@ import com.lancast.core.CursorPos
 import com.lancast.core.CursorShape
 import com.lancast.core.FileProgress
 import com.lancast.core.FileTransfer
+import com.lancast.core.GamepadRumble
 import com.lancast.core.MouseButtonId
 import com.lancast.core.HostInfo
 import com.lancast.core.HostServer
@@ -74,6 +77,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     private lateinit var filesStatus: TextView
     private var pad: OnScreenPad? = null
     private lateinit var gamepads: GamepadInput
+    private val mic = MicSender { session }
+    private var micButton: TextView? = null
     private var files: FileTransfer? = null
     private var pickingFiles = false  // El selector de archivos tapa la pantalla: la sesión sigue viva.
     @Volatile private var lastRemoteClipboard: String? = null
@@ -140,7 +145,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     override fun onStop() {
         super.onStop()
         if (pickingFiles) return
+        session?.history()?.let { if (it.isNotEmpty()) AppLog.lastStats = it }
         gamepads.disconnectAll()
+        mic.stop()
+        micButton?.text = "Micrófono: no"
         pad?.release()
         files?.close()
         files = null
@@ -184,6 +192,10 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     }
 
     // PC -> teléfono.
+    override fun onRumble(rumble: GamepadRumble) = ui.post {
+        if (::gamepads.isInitialized && session != null) gamepads.rumble(this, rumble)
+    }.let {}
+
     override fun onClipboard(text: String) {
         if (session?.hostInfo?.clipboardAllowed != true) return
         lastRemoteClipboard = text
@@ -264,7 +276,14 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
     }.let {}
 
     override fun onHostInfo(info: HostInfo) = ui.post {
-        if (!info.inputAllowed) {
+        if ((!info.inputAllowed || !info.micAvailable) && mic.active) {  // Pasó a "solo ver": el micrófono se apaga.
+            mic.stop()
+            micButton?.text = "Micrófono: no"
+        }
+        if (info.spectator) {
+            val who = if (info.controllerName.isNotEmpty()) " (controla ${info.controllerName})" else ""
+            Toast.makeText(this, "Espectador$who: solo ves y escuchas", Toast.LENGTH_LONG).show()
+        } else if (!info.inputAllowed) {
             val why = if (info.platform == HostServer.PLATFORM_ANDROID) "no activó el control remoto (Accesibilidad)" else "no permite el control"
             Toast.makeText(this, "${info.hostName} $why: solo ver", Toast.LENGTH_LONG).show()
         }
@@ -358,6 +377,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onStreamStarted(stream: StreamStarted) {
         this.stream = stream
+        AppLog.lastStream = "${stream.codec.label} ${stream.width}x${stream.height} @ ${stream.fps} fps · ${stream.bitrateKbps} kbps · ${stream.encoderBackend}"
+        AppLog.add("Stream con $address: ${AppLog.lastStream}")
         ui.post {
             monitorId = stream.monitorId.takeIf { it != 0 } ?: monitorId
             surfaceView.holder.setFixedSize(stream.width, stream.height)
@@ -405,9 +426,14 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
 
     override fun onCursorShape(shape: CursorShape) = ui.post { cursorView.setShape(shape) }.let {}
 
-    override fun onMessage(text: String) = ui.post { Toast.makeText(this, text, Toast.LENGTH_LONG).show() }.let {}
+    override fun onMessage(text: String) = ui.post {
+        AppLog.add("Aviso: $text")
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+    }.let {}
 
     override fun onClosed(reason: String, retryable: Boolean) = ui.post {
+        AppLog.add("Conexión con $address cerrada: $reason")
+        session?.history()?.let { if (it.isNotEmpty()) AppLog.lastStats = it }
         if (isFinishing || session == null) return@post
         // Corte de red: reintentar cada 2 s durante 1 minuto (ya emparejados, sin PIN).
         if (retryable && connectedOnce) {
@@ -564,6 +590,8 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         add(button("Zoom 1:1") { resetZoom() })
         add(button("Archivos") { pickFiles() })
         add(button("Mando") { togglePad() })
+        micButton = button(if (mic.active) "Micrófono: sí" else "Micrófono: no") { toggleMic() }
+        add(micButton!!)
         lateinit var bubbleToggle: TextView
         bubbleToggle = button(if (storage.keyboardBubble) "Teclado flotante: sí" else "Teclado flotante: no") {
             storage.keyboardBubble = !storage.keyboardBubble
@@ -921,6 +949,32 @@ class StreamActivity : Activity(), SessionListener, TouchController.Host {
         const val EXTRA_ADDRESS = "address"
         const val EXTRA_PORT = "port"
         private const val REQUEST_FILES = 7
+        private const val REQUEST_MIC = 8
+    }
+
+    // Micrófono del teléfono -> PC (llega allá como un micrófono si el PC tiene un cable de audio virtual).
+    private fun toggleMic() {
+        if (mic.active) {
+            mic.stop()
+        } else if (session?.hostInfo?.inputAllowed != true) {
+            Toast.makeText(this, "En modo solo ver no se puede hablar por el micrófono", Toast.LENGTH_LONG).show()
+        } else if (session?.hostInfo?.micAvailable != true) {
+            AlertDialog.Builder(this).setTitle("Micrófono")
+                .setMessage("Para que tu micrófono llegue al PC como un micrófono más (Discord, Teams, juegos), el PC necesita " +
+                    "un cable de audio virtual: instala VB-Cable (gratis, vb-audio.com/Cable), deja activado \"Recibir el " +
+                    "micrófono del cliente\" en LanCast y vuelve a conectar. Allá elige el micrófono \"CABLE Output\".")
+                .setPositiveButton("Entendido", null).show()
+        } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
+        } else if (!mic.start()) {
+            Toast.makeText(this, "No se pudo abrir el micrófono", Toast.LENGTH_LONG).show()
+        }
+        micButton?.text = if (mic.active) "Micrófono: sí" else "Micrófono: no"
+    }
+
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == REQUEST_MIC && grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED) toggleMic()
     }
 
     // ------------------------------------------------------------------------------------------- mando, mouse, S Pen y teclado físico

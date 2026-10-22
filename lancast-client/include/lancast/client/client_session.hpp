@@ -18,6 +18,7 @@
 #include "lancast/core/media.hpp"
 #include "lancast/core/protocol.hpp"
 #include "lancast/core/settings.hpp"
+#include "lancast/core/loss_meter.hpp"
 #include "lancast/platform/audio.hpp"
 #include "lancast/platform/files.hpp"
 #include "lancast/platform/net.hpp"
@@ -119,6 +120,16 @@ public:
     [[nodiscard]] std::optional<proto::StreamStarted> stream(int index = 0) const;
 
     void request_stream(const proto::StreamConfig& config);  // config.stream_index elige el stream.
+    // FEC automático: la paridad se ajusta según las pérdidas que ve el cliente (sin pérdidas baja hasta 5 %; con
+    // pérdidas sube enseguida, hasta 40 %). Cambiarla no reinicia el codificador ni corta la imagen.
+    void set_auto_fec(bool on) noexcept { auto_fec_ = on; }
+    // Enviar el micrófono predeterminado de este equipo al host (solo si el host lo acepta: HostInfo::mic_available).
+    void set_microphone(bool on) noexcept { microphone_ = on; }
+    // Restar del micrófono el audio del host que suena por los parlantes (si Windows no lo hace ya).
+    void set_echo_cancel(bool on) noexcept { echo_cancel_ = on; }
+    [[nodiscard]] bool echo_cancel_active() const noexcept { return echo_cancel_active_; }
+    [[nodiscard]] bool microphone_active() const noexcept { return mic_active_; }
+    [[nodiscard]] int current_fec() const noexcept { return fec_current_.load(); }
     void stop_second_stream();
     [[nodiscard]] std::optional<std::string> take_second_stream_error();
     void request_keyframe(int index = 0);
@@ -133,6 +144,8 @@ public:
     [[nodiscard]] std::optional<proto::CursorShape> take_cursor_shape();
     [[nodiscard]] proto::CursorPos cursor(int index = 0) const;
     [[nodiscard]] std::optional<std::string> take_clipboard();
+    // Vibraciones pedidas por el host desde la última llamada (la última por mando).
+    [[nodiscard]] std::vector<proto::GamepadRumble> take_rumble();
 
     // La interfaz informa los tiempos de decodificación/presentación de cada frame.
     void report_presented(const media::EncodedFrameInfo& info, std::uint64_t arrival_us, double decode_ms,
@@ -182,6 +195,10 @@ private:
     std::array<std::uint8_t, 32> media_tx_key_{};
     std::uint16_t media_port_ = 0;
     std::optional<proto::HostInfo> host_info_;
+    std::atomic<bool> microphone_{false};
+    std::atomic<bool> mic_active_{false};
+    std::atomic<bool> echo_cancel_{true};
+    std::atomic<bool> echo_cancel_active_{false};
 
     // Video: un "slot" por stream (principal y segunda ventana). Campos protegidos por mutex_, salvo el
     // ensamblador y el unidor de slices, que solo usa el hilo de medios.
@@ -205,6 +222,7 @@ private:
     // Cursor y portapapeles
     std::optional<proto::CursorShape> cursor_shape_;
     std::optional<std::string> clipboard_;
+    std::vector<proto::GamepadRumble> rumble_;
 
     // Audio
     audio::Player player_;
@@ -219,8 +237,9 @@ private:
     std::uint64_t window_presented_ = 0;
     std::uint64_t window_bytes_ = 0;
     std::uint64_t window_packets_ = 0;
-    std::uint64_t window_min_seq_ = ~0ull;
-    std::uint64_t window_max_seq_ = 0;
+    // Pérdida por secuencia, tolerante al desorden (audio que se adelanta a una tanda de video): para las
+    // estadísticas de 1 s y para las ventanas de 250 ms (gráficos y FEC automático).
+    media::LossMeter window_loss_;
 
     // Historial fino (gráficos): ventanas de 250 ms.
     std::deque<FrameSample> frame_history_;
@@ -229,11 +248,20 @@ private:
     std::uint64_t fine_bytes_ = 0;
     std::uint64_t fine_packets_ = 0;
     std::uint64_t fine_presented_ = 0;
-    std::uint64_t fine_min_seq_ = ~0ull;
-    std::uint64_t fine_max_seq_ = 0;
+    media::LossMeter fine_loss_;
     std::uint64_t fine_last_recovered_ = 0;
     std::uint64_t fine_last_lost_ = 0;
     std::uint64_t fine_last_idr_ = 0;
+    // FEC automático (protegido por mutex_, salvo los atómicos).
+    std::atomic<bool> auto_fec_{false};
+    std::atomic<int> fec_current_{10};
+    std::optional<proto::StreamConfig> last_config_;
+    std::optional<proto::StreamConfig> fec_pending_;  // Se envía fuera del candado.
+    std::uint64_t fec_clean_since_us_ = 0;
+    int fec_trouble_count_ = 0;  // Muestras con pérdidas desde fec_clean_since_us_.
+    void auto_fec_tick(const NetSample& s, std::uint64_t now);
+    void remember_mac();
+    std::string host_id_;  // Protegido por mutex_.
     void tick_history(std::uint64_t now);  // Con mutex_ tomado.
 
     void send_next_probe();

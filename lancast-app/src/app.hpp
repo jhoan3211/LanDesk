@@ -83,6 +83,7 @@ private:
     [[nodiscard]] proto::StreamConfig make_stream_config() const;
     void apply_stream_settings();
     void apply_min_latency();
+    void apply_max_quality();
     // Resolución y frecuencia del monitor donde está la ventana del cliente.
     [[nodiscard]] Size display_size() const;
     [[nodiscard]] std::uint32_t display_hz() const;
@@ -118,6 +119,7 @@ private:
     void draw_transfers(files::Manager& manager, const char* id);
     void draw_settings_page();
     void draw_diagnostics_page();
+    std::filesystem::path write_support_file();
     void draw_stream_overlay();
     void draw_stats_overlay();
     void draw_graphs();
@@ -164,12 +166,18 @@ private:
     // Cliente
     std::unique_ptr<client::ClientSession> session_;
     std::unique_ptr<VideoRenderer> renderer_;
+    std::optional<mf::VideoEngineKeepAwake> keep_awake_;
+    std::string virtual_mic_name_;  // Cable de audio virtual del host (vacío = no hay).
+    std::uint64_t virtual_mic_checked_us_ = 0;
+    bool virtual_mic_is_default_ = false;  // Solo mientras hay stream.
     std::vector<client::DiscoveredHost> discovered_;
     std::uint64_t last_discovery_us_ = 0;
     std::thread discovery_thread_;
     std::atomic<bool> discovery_running_{false};
     std::mutex discovery_mutex_;
     std::string address_input_;
+    std::vector<sys::PairedDevice> paired_hosts_;  // Equipos emparejados (se relee cada 4 s en la página de conexión).
+    std::uint64_t paired_hosts_checked_us_ = 0;
     std::string pin_input_;
     bool pin_modal_open_ = false;
     bool show_menu_ = false;
@@ -195,6 +203,8 @@ private:
     bool mod_shift_[2] = {false, false};
     std::set<DWORD> typed_keys_;  // Teclas cuyo carácter ya se mandó como texto (host en un teléfono).
     std::string last_remote_clipboard_;
+    std::array<bool, 4> pads_rumbling_{};  // Mandos locales vibrando por pedido del host.
+    void stop_rumble();
     std::array<proto::GamepadState, 4> pads_sent_{};  // Último estado enviado de cada mando (connected = presente).
     std::uint64_t pads_scan_us_ = 0;                   // Los huecos vacíos se revisan cada 2 s (XInput es lento ahí).
     std::uint64_t last_present_us_ = 0;

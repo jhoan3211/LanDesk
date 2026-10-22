@@ -7,6 +7,8 @@
 #include "lancast/platform/net.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cctype>
 #include <charconv>
 #include <format>
 
@@ -367,6 +369,34 @@ std::string computer_name() {
     DWORD size = 256;
     if (!GetComputerNameExW(ComputerNamePhysicalDnsHostname, name, &size)) return "PC";
     return platform::detail::to_utf8(name);
+}
+
+bool wake_on_lan(const std::string& mac, std::uint32_t last_ip) {
+    // "aa:bb:cc:dd:ee:ff" (o con guiones, o sin separadores).
+    std::string hex;
+    for (const char c : mac) {
+        if (std::isxdigit(static_cast<unsigned char>(c)) != 0) hex.push_back(c);
+        else if (c != ':' && c != '-') return false;
+    }
+    if (hex.size() != 12) return false;
+    std::array<std::uint8_t, 6> m{};
+    for (std::size_t i = 0; i < 6; ++i) m[i] = static_cast<std::uint8_t>(std::stoul(hex.substr(i * 2, 2), nullptr, 16));
+    if (std::ranges::all_of(m, [](std::uint8_t b) { return b == 0; })) return false;
+    std::vector<std::uint8_t> packet(6, 0xFF);
+    for (int r = 0; r < 16; ++r) packet.insert(packet.end(), m.begin(), m.end());
+    auto sock = UdpSocket::bind(0);
+    if (!sock) return false;
+    sock->set_broadcast(true);
+    std::vector<std::uint32_t> targets{0xFFFFFFFFu};
+    for (const auto& a : local_addresses()) targets.push_back(a.broadcast);
+    if (last_ip != 0) targets.push_back(last_ip);
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        for (const std::uint32_t ip : targets) {
+            for (const std::uint16_t port : {std::uint16_t{9}, std::uint16_t{7}}) sock->send_to(Endpoint{ip, port}, packet);
+        }
+        Sleep(50);
+    }
+    return true;
 }
 
 }  // namespace lancast::net

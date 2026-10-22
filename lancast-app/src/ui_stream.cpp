@@ -122,6 +122,14 @@ void App::draw_stream_toolbar() {
                                                                stream->audio_channels == 1 ? "mono" : "estéreo").c_str()
                                                  : "apagado");
     }
+    // Espectador: otro equipo tiene el control; la calidad la elige quien controla.
+    if (const auto hi = session_->host_info(); hi && hi->spectator) {
+        const std::string who = hi->controller_name.empty() ? std::string{"Espectador"} : "Espectador · controla " + hi->controller_name;
+        place(ImGui::CalcTextSize(who.c_str()).x);
+        ImGui::AlignTextToFramePadding();
+        ImGui::TextColored(kWarn, "%s", who.c_str());
+        ImGui::SetItemTooltip("Solo ves y escuchas: el control, el micrófono y la calidad del stream son de quien controla.");
+    }
 
     // Resolución
     place(200 * scale_);
@@ -253,6 +261,21 @@ void App::draw_stream_toolbar() {
         ImGui::EndCombo();
     }
 
+    // Micrófono de este equipo -> host (solo si el host tiene un cable de audio virtual para recibirlo).
+    if (info && info->mic_available && control_enabled()) {  // En "solo ver" no se habla por el micrófono.
+        const bool on = settings_.client.microphone;
+        const char* mic_label = on ? "Micrófono encendido" : "Micrófono apagado";
+        place(button_w(mic_label));
+        if (on) ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_ButtonActive));
+        if (ImGui::Button(mic_label)) {
+            settings_.client.microphone = !on;
+            session_->set_microphone(settings_.client.microphone);
+            save_settings();
+        }
+        if (on) ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Tu micrófono llega al host como un micrófono más (para llamadas o juegos allá).");
+    }
+
     // Segunda ventana: un botón, una lista o nada (si el host tiene un solo monitor).
     if (second_) {
         place(button_w(std::format("Cerrar ventana del monitor {}", second_monitor_id_)));
@@ -263,6 +286,10 @@ void App::draw_stream_toolbar() {
     place(button_w("Latencia mínima"));
     if (primary_button("Latencia mínima")) apply_min_latency();
     ImGui::SetItemTooltip("FPS = Hz del monitor del host, V-Sync apagado, codificador rápido y pantalla completa");
+    place(button_w("Calidad máxima"));
+    if (primary_button("Calidad máxima")) apply_max_quality();
+    ImGui::SetItemTooltip("Resolución nativa del host (sin escalar) y 50 %% más bitrate, con el codificador rápido: la imagen "
+                          "mejora y la latencia sube muy poco (~2 ms en una GPU integrada)");
     place(button_w(show_stats_ ? "Ocultar estadísticas" : "Estadísticas"));
     if (ImGui::Button(show_stats_ ? "Ocultar estadísticas" : "Estadísticas")) {
         show_stats_ = !show_stats_;

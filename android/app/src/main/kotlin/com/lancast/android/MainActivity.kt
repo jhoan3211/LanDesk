@@ -322,6 +322,8 @@ class MainActivity : Activity() {
         col.addView(button("Nombre de este teléfono") { editName() }.apply { margins(top = dp(8)) })
         col.addView(button("Buscar actualizaciones (versión ${Updater.currentVersion(this)})") { checkUpdate(manual = true) }
             .apply { margins(top = dp(8)) })
+        col.addView(button("Enviar diagnóstico (si algo falla)") { Diagnostics.share(this, storage) }
+            .apply { margins(top = dp(8)) })
 
         col.addView(text(
             "Necesitas LanCast 1.5 o superior en el PC y estar en la misma red. La primera vez el PC muestra un PIN de 6 dígitos.\n\n" +

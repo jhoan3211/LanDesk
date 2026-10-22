@@ -3,6 +3,9 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <fstream>
+
+#include <shlobj.h>
 
 #include "app.hpp"
 #include "app_internal.hpp"
@@ -101,7 +104,8 @@ void App::draw_connect_page() {
         if (h.paired) badge("emparejado", kGood);
         if (h.busy) {
             ImGui::SameLine();
-            badge("ocupado", kWarn);
+            badge("en uso", kWarn);
+            ImGui::SetItemTooltip("Alguien lo está controlando. Si el host permite espectadores, al conectarte lo ves (solo ver).");
         }
         ImGui::TextColored(kMuted, "%s", h.endpoint.to_string().c_str());
         ImGui::SameLine(ImGui::GetWindowWidth() - 130 * scale_);
@@ -109,6 +113,50 @@ void App::draw_connect_page() {
         if (primary_button("Conectar", ImVec2(110 * scale_, 0))) {
             address_input_ = h.endpoint.port == kDefaultControlPort ? h.endpoint.ip_string() : h.endpoint.to_string();
             start_connect(address_input_);
+        }
+        ImGui::EndChild();
+        ImGui::PopID();
+    }
+
+    // Emparejados que no aparecen en la red (apagados, suspendidos o en otra IP): conectar a su última IP o despertarlos.
+    if (now - paired_hosts_checked_us_ > 4'000'000) {
+        paired_hosts_checked_us_ = now;
+        paired_hosts_.clear();
+        for (auto& d : sys::load_paired()) {
+            if (d.role == "host") paired_hosts_.push_back(std::move(d));
+        }
+    }
+    bool header = false;
+    for (const auto& d : paired_hosts_) {
+        if (std::ranges::any_of(hosts, [&](const client::DiscoveredHost& h) { return h.id_hex == d.id_hex; })) continue;
+        if (!header) {
+            section("Equipos emparejados que no responden");
+            header = true;
+        }
+        ImGui::PushID(d.id_hex.c_str());
+        ImGui::BeginChild("##paired", ImVec2(0, 64 * scale_), ImGuiChildFlags_Borders);
+        ImGui::PushFont(font_big_, 0.0f);
+        ImGui::TextUnformatted(d.name.c_str());
+        ImGui::PopFont();
+        ImGui::TextColored(kMuted, "%s%s", d.last_address.c_str(), d.mac.empty() ? "" : std::format(" · {}", d.mac).c_str());
+        ImGui::SameLine(ImGui::GetWindowWidth() - 250 * scale_);
+        ImGui::SetCursorPosY(14 * scale_);
+        ImGui::BeginDisabled(d.mac.empty());
+        if (ImGui::Button("Despertar", ImVec2(110 * scale_, 0))) {
+            const auto ep = net::Endpoint::parse(d.last_address, kDefaultControlPort);
+            if (net::wake_on_lan(d.mac, ep ? ep->ip : 0)) {
+                toast(std::format("Despertando {}… suele tardar 10-30 s en aparecer", d.name));
+            } else {
+                toast("No se pudo enviar el aviso de Wake-on-LAN");
+            }
+        }
+        ImGui::EndDisabled();
+        if (d.mac.empty()) ImGui::SetItemTooltip("Conéctate una vez con LanCast 1.7 o superior para conocer su MAC");
+        else ImGui::SetItemTooltip("Wake-on-LAN: el PC debe tenerlo activado en la BIOS y en la tarjeta de red");
+        ImGui::SameLine();
+        if (primary_button("Conectar", ImVec2(110 * scale_, 0))) {
+            address_input_ = d.last_address;
+            start_connect(d.last_address);
         }
         ImGui::EndChild();
         ImGui::PopID();
@@ -376,6 +424,11 @@ void App::draw_stream_settings(bool live) {
         if (live) {
             row("");
             if (primary_button("Aplicar latencia mínima")) apply_min_latency();
+            ImGui::SameLine();
+            if (primary_button("Aplicar calidad máxima")) apply_max_quality();
+            help("Calidad máxima: resolución nativa del host (sin escalar) y 50 % más bitrate, con el codificador rápido "
+                 "(sube ~2 ms en una GPU integrada). El 4:4:4 da texto aún más nítido pero cuesta más (+3 a +7 ms medidos en "
+                 "una GPU integrada; menos en una dedicada): actívalo aparte si trabajas con mucho texto.");
         }
 
         row("Audio");
@@ -409,10 +462,37 @@ void App::draw_stream_settings(bool live) {
         ImGui::EndDisabled();
 
         row("FEC");
+        if (ImGui::Checkbox("Automático##fecauto", &s.fec_auto)) changed = true;
+        if (s.fec_auto && session_) {
+            ImGui::SameLine();
+            ImGui::TextDisabled("ahora %d %%", session_->current_fec());
+        }
+        help("Automático: sin pérdidas baja hasta 5 % (por cable: menos paquetes y cuadros que salen antes); si aparecen "
+             "pérdidas (Wi-Fi) sube enseguida, hasta 40 %. Cambiarlo no corta la imagen.");
+        ImGui::BeginDisabled(s.fec_auto);
+        row("  Fijo");
         int fec = static_cast<int>(s.fec_percent);
         if (ImGui::SliderInt("##fec", &fec, 0, 50, "%d %%")) s.fec_percent = static_cast<std::uint32_t>(fec);
+        ImGui::EndDisabled();
         if (ImGui::IsItemDeactivatedAfterEdit()) changed = true;
         help("Paquetes de paridad Reed-Solomon: recuperan pérdidas sin esperar retransmisiones. 10–20% es lo recomendado.");
+        row("Micrófono");
+        if (ImGui::Checkbox("Cancelar el eco##aec", &settings_.client.echo_cancel)) save_settings();
+        if (session_ && session_->microphone_active()) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(session_->echo_cancel_active() ? "activa" : "apagada");
+        }
+        help("Con parlantes, el micrófono capta el sonido del host y lo devolvería (eco en las llamadas allá). LanCast "
+             "resta del micrófono lo que suena por los parlantes. Con audífonos puedes apagarlo.");
+        row("Decodificación");
+        if (ImGui::Checkbox("Mantener despierta la unidad de video##awake", &settings_.client.keep_decoder_awake)) save_settings();
+        if (keep_awake_) {
+            ImGui::SameLine();
+            ImGui::TextDisabled(keep_awake_->active() ? "activa" : "no disponible");
+        }
+        help("Algunas GPU (sobre todo las integradas de AMD) apagan la unidad de video entre cuadros y cada cuadro paga el "
+             "despertar. Mantenerla ocupada con un cuadro diminuto baja la decodificación a 1440p de ~10 a ~5 ms. Gasta "
+             "un poco más de energía: apágalo en un portátil con batería si no te importa esa diferencia.");
         ImGui::EndTable();
     }
 
@@ -472,6 +552,15 @@ void App::draw_host_page() {
     } else {
         ImGui::TextColored(kMuted, "El host está desactivado.");
     }
+    if (st.calibrating) {
+        ImGui::TextColored(kMuted, "Midiendo el codificador de esta GPU (unos segundos, una sola vez)…");
+    } else if (st.encode_420_ms > 0) {
+        ImGui::TextColored(kMuted, "Codificador a %ux%u: %.1f ms por cuadro%s", st.calibrated_size.width, st.calibrated_size.height,
+                           st.encode_420_ms,
+                           st.encode_444_ms > 0 ? std::format(" · con 4:4:4: {:.1f} ms", st.encode_444_ms).c_str() : "");
+        ImGui::SetItemTooltip("Medido al abrir LanCast (una vez por tarjeta y versión del driver). «Calidad máxima» suma "
+                              "4:4:4 solo si cuesta 3 ms o menos.");
+    }
 
     if (st.session_active) {
         section("Sesión activa");
@@ -488,8 +577,19 @@ void App::draw_host_page() {
                 ImGui::TextColored(kWarn, "El codificador no da abasto: %.0f %% de cuadros saltados", st.stats.skipped_percent);
             }
         }
+        if (!st.viewers.empty()) {
+            ImGui::TextColored(kMuted, "Espectadores (solo ven): %s", [&] {
+                std::string all;
+                for (const auto& v : st.viewers) all += (all.empty() ? "" : ", ") + v;
+                return all;
+            }().c_str());
+        }
         if (danger_button("Desconectar")) host_.disconnect();
         ImGui::SameLine();
+        if (!st.viewers.empty()) {
+            if (ImGui::Button("Desconectar espectadores")) host_.disconnect_viewers();
+            ImGui::SameLine();
+        }
         bool view_only = st.view_only;
         if (ImGui::Checkbox("Solo ver (bloquear el control)", &view_only)) host_.set_view_only(view_only);
         ImGui::SameLine();
@@ -509,6 +609,29 @@ void App::draw_host_page() {
     changed |= ImGui::Checkbox("Sincronizar portapapeles de texto", &settings_.host.allow_clipboard);
     changed |= ImGui::Checkbox("Permitir transferencia de archivos", &settings_.host.allow_files);
     changed |= ImGui::Checkbox("Transmitir el audio del equipo", &settings_.host.allow_audio);
+    changed |= ImGui::Checkbox("Permitir espectadores (otros ven mientras alguien controla, hasta 4)", &settings_.host.allow_viewers);
+    changed |= ImGui::Checkbox("Recibir el micrófono del cliente", &settings_.host.allow_microphone);
+    if (settings_.host.allow_microphone) {
+        if (gpu::now_us() - virtual_mic_checked_us_ > 3'000'000) {
+            const auto dev = audio::virtual_mic_device();
+            virtual_mic_name_ = dev ? dev->name : std::string{};
+            virtual_mic_is_default_ = dev && dev->default_output;
+            virtual_mic_checked_us_ = gpu::now_us();
+        }
+        ImGui::Indent();
+        if (virtual_mic_is_default_) {
+            ImGui::TextColored(kBad, "\"%s\" está como salida de sonido predeterminada: la voz del cliente volvería a él (eco). "
+                                     "Elige tus parlantes como salida predeterminada en Windows.",
+                               virtual_mic_name_.c_str());
+        } else if (!virtual_mic_name_.empty()) {
+            ImGui::TextColored(kMuted, "Llega a \"%s\": en Discord, Teams o el juego elige su micrófono \"CABLE Output\".",
+                               virtual_mic_name_.c_str());
+        } else {
+            ImGui::TextColored(kMuted, "Falta un cable de audio virtual: instala VB-Cable (gratis, vb-audio.com/Cable) y el "
+                                       "micrófono del cliente aparecerá aquí como \"CABLE Output\".");
+        }
+        ImGui::Unindent();
+    }
     if (ImGui::Checkbox("Mostrar una barra roja arriba mientras alguien está conectado", &settings_.host.session_banner)) {
         changed = true;
         update_session_banner();
@@ -766,6 +889,93 @@ void App::draw_settings_page() {
     if (ImGui::SmallButton("Abrir carpeta de configuración")) sys::open_in_explorer(sys::app_data_dir());
 }
 
+// Archivo de texto para soporte en el escritorio: todo lo que sirve para entender un problema, sin secretos (los
+// emparejamientos y claves no se incluyen).
+std::filesystem::path App::write_support_file() {
+    if (!report_) report_ = platform::collect_system_report();
+    std::string t;
+    auto line = [&](const std::string& s) {
+        t += s;
+        t += "\r\n";
+    };
+    SYSTEMTIME now{};
+    GetLocalTime(&now);
+    line(std::format("LanCast {} · diagnóstico del {:04}-{:02}-{:02} {:02}:{:02}", kAppVersion, now.wYear, now.wMonth, now.wDay,
+                     now.wHour, now.wMinute));
+    const sig::Info self_sig = sig::verify(sys::exe_path());
+    line(self_sig.valid ? "Firma: válida (" + self_sig.subject + ")" : "Firma: " + self_sig.error);
+    line("");
+    line("== Equipo ==");
+    t += format_report_text(*report_, true);
+    line("");
+    line("== Host ==");
+    const host::Status hs = host_.status();
+    line(std::format("Escuchando: {}{}", hs.listening ? "sí" : "no", hs.error.empty() ? "" : " · error: " + hs.error));
+    for (const auto& a : hs.addresses) line("  " + a);
+    if (hs.encode_420_ms > 0) {
+        line(std::format("Codificador medido a {}x{}: {:.2f} ms (4:4:4 {:.2f} ms)", hs.calibrated_size.width, hs.calibrated_size.height,
+                         hs.encode_420_ms, hs.encode_444_ms));
+    }
+    {
+        const auto vmic = audio::virtual_mic_device();
+        line(std::format("Micrófono del cliente: {} · cable virtual: {}", settings_.host.allow_microphone ? "permitido" : "no permitido",
+                         vmic ? vmic->name : "no hay"));
+    }
+    if (hs.session_active) {
+        line(std::format("Sesión con {} ({})", hs.client_name, hs.client_address));
+        if (hs.stream) {
+            line(std::format("  {} {}x{} @ {} fps · {} kbps · {}", to_string(hs.stream->codec), hs.stream->width, hs.stream->height,
+                             hs.stream->fps, hs.stream->bitrate_kbps, hs.encoder_name));
+        }
+        line(std::format("  Enviando {:.0f} fps · {:.1f} Mbps · captura+codificación {:.2f} ms · {:.1f} % saltados", hs.stats.fps,
+                         hs.stats.bitrate_mbps, hs.stats.encode_ms, hs.stats.skipped_percent));
+    }
+    line("");
+    line("== Cliente ==");
+    if (session_) {
+        line(std::format("Estado: {} · host {} · {}", client::to_string(session_->state()), session_->host_name(), session_->message()));
+        if (const auto st = session_->stream()) {
+            line(std::format("Stream: {} {}x{}{}{} @ {} fps · {} kbps · {}", to_string(st->codec), st->width, st->height,
+                             st->chroma_444 ? " 4:4:4" : "", st->hdr ? " HDR" : "", st->fps, st->bitrate_kbps, st->encoder_backend));
+        }
+        const client::Stats s = session_->stats();
+        line(std::format("FPS {:.0f} · {:.1f} Mbps · host {:.2f} ms · red {:.2f} ms · decodificación {:.2f} ms · presentación {:.2f} ms · "
+                         "total {:.2f} ms",
+                         s.fps, s.bitrate_mbps, s.encode_ms, s.network_ms, s.decode_ms, s.present_ms, s.total_ms));
+        line(std::format("RTT {:.2f} ms · pérdida {:.2f} % · FEC {} % · reparados {} · perdidos {} · keyframes pedidos {}", s.rtt_ms,
+                         s.packet_loss_pct, session_->current_fec(), s.frames_recovered, s.frames_lost, s.keyframe_requests));
+        line(std::format("Unidad de video despierta: {} · micrófono hacia el host: {}",
+                         keep_awake_ ? (keep_awake_->active() ? "activa" : "no disponible") : "apagada",
+                         session_->microphone_active() ? "enviando" : "apagado"));
+        if (s.real_latency_ms > 0) {
+            line(std::format("Latencia real medida: {:.1f} ms (mín {:.1f}, máx {:.1f})", s.real_latency_ms, s.real_latency_min_ms,
+                             s.real_latency_max_ms));
+        }
+    } else {
+        line("Sin sesión");
+    }
+    line("");
+    line("== Ajustes ==");
+    t += settings_to_toml(settings_);
+    line("");
+    line("== Cierres inesperados ==");
+    for (const auto& d : crash::list(sys::app_data_dir() / L"crashes")) line(detail::narrow(d.filename().wstring()));
+    line("");
+    line("== Registro (últimas 500 líneas) ==");
+    for (const auto& e : log::recent(500)) line(std::format("[{}] {}", log::level_name(e.level), e.message));
+
+    PWSTR desktop = nullptr;
+    std::filesystem::path dir = sys::app_data_dir();
+    if (SUCCEEDED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktop))) dir = desktop;
+    CoTaskMemFree(desktop);
+    const auto path = dir / std::format(L"LanCast-diagnostico-{:04}{:02}{:02}-{:02}{:02}{:02}.txt", now.wYear, now.wMonth, now.wDay,
+                                        now.wHour, now.wMinute, now.wSecond);
+    std::ofstream out(path, std::ios::binary);
+    out.write("\xEF\xBB\xBF", 3);  // UTF-8 con BOM: el Bloc de notas lo abre bien.
+    out.write(t.data(), static_cast<std::streamsize>(t.size()));
+    return out ? path : std::filesystem::path{};
+}
+
 void App::draw_diagnostics_page() {
     ImGui::PushFont(font_big_, ImGui::GetStyle().FontSizeBase * 1.3f);
     ImGui::TextUnformatted("Diagnóstico del equipo");
@@ -776,6 +986,18 @@ void App::draw_diagnostics_page() {
         ImGui::SetClipboardText(format_report_text(*report_, true).c_str());
         toast("Copiado");
     }
+    ImGui::SameLine();
+    if (primary_button("Crear archivo para soporte")) {
+        const auto path = write_support_file();
+        if (path.empty()) {
+            toast("No se pudo crear el archivo");
+        } else {
+            toast("Archivo creado en el escritorio: " + detail::narrow(path.filename().wstring()));
+            sys::open_in_explorer(path.parent_path());
+        }
+    }
+    ImGui::SetItemTooltip("Junta en un solo archivo de texto la versión, el equipo, el estado del host y de la sesión, las "
+                          "estadísticas y el registro, para mandarlo cuando algo falla. No incluye contraseñas ni claves.");
 
     // Firma digital de este ejecutable.
     static const sig::Info self_sig = sig::verify(sys::exe_path());

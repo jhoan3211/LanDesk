@@ -330,6 +330,7 @@ class ShareService : Service(), HostListener {
     }
 
     private fun update(s: State) {
+        if (s.detail != current.detail && s.detail.isNotEmpty()) AppLog.add("Compartir: ${s.detail}")
         current = s
         ui.post { listeners.toList().forEach { it(s) } }
     }

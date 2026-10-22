@@ -46,6 +46,7 @@ void stream_to_table(const StreamSettings& s, toml::Table& t) {
     t.set("audio_volume", static_cast<std::int64_t>(s.audio_volume));
     t.set("audio_buffer_ms", static_cast<std::int64_t>(s.audio_buffer_ms));
     t.set("fec_percent", static_cast<std::int64_t>(s.fec_percent));
+    t.set("fec_auto", s.fec_auto);
     t.set("low_latency", s.low_latency);
     t.set("intra_refresh", s.intra_refresh);
     t.set("slices", s.slices);
@@ -76,6 +77,7 @@ StreamSettings stream_from_table(const toml::Table& t) {
     s.audio_volume = clamp_u32(t.get_int("audio_volume").value_or(s.audio_volume), 0, 100);
     s.audio_buffer_ms = clamp_u32(t.get_int("audio_buffer_ms").value_or(s.audio_buffer_ms), 5, 200);
     s.fec_percent = clamp_u32(t.get_int("fec_percent").value_or(s.fec_percent), 0, 50);
+    s.fec_auto = t.get_bool("fec_auto").value_or(s.fec_auto);
     s.low_latency = t.get_bool("low_latency").value_or(s.low_latency);
     s.intra_refresh = t.get_bool("intra_refresh").value_or(s.intra_refresh);
     s.slices = t.get_bool("slices").value_or(s.slices);
@@ -152,6 +154,8 @@ std::string settings_to_toml(const AppSettings& s) {
     h.set("allow_clipboard", s.host.allow_clipboard);
     h.set("allow_files", s.host.allow_files);
     h.set("allow_audio", s.host.allow_audio);
+    h.set("allow_microphone", s.host.allow_microphone);
+    h.set("allow_viewers", s.host.allow_viewers);
     h.set("private_networks_only", s.host.private_networks_only);
     h.set("ip_whitelist", s.host.ip_whitelist);
     h.set("receive_folder", s.host.receive_folder);
@@ -168,6 +172,9 @@ std::string settings_to_toml(const AppSettings& s) {
     c.set("relative_mouse", s.client.relative_mouse);
     c.set("show_stats", s.client.show_stats);
     c.set("show_graphs", s.client.show_graphs);
+    c.set("keep_decoder_awake", s.client.keep_decoder_awake);
+    c.set("microphone", s.client.microphone);
+    c.set("echo_cancel", s.client.echo_cancel);
     c.set("simulate_loss_percent", static_cast<std::int64_t>(s.client.simulate_loss_percent));
     c.set("toolbar_collapsed", s.client.toolbar_collapsed);
     c.set("toolbar_tab_percent", static_cast<std::int64_t>(s.client.toolbar_tab_percent));
@@ -206,6 +213,8 @@ AppSettings settings_from_toml(std::string_view text) {
         s.host.allow_clipboard = h->get_bool("allow_clipboard").value_or(s.host.allow_clipboard);
         s.host.allow_files = h->get_bool("allow_files").value_or(s.host.allow_files);
         s.host.allow_audio = h->get_bool("allow_audio").value_or(s.host.allow_audio);
+        s.host.allow_microphone = h->get_bool("allow_microphone").value_or(s.host.allow_microphone);
+        s.host.allow_viewers = h->get_bool("allow_viewers").value_or(s.host.allow_viewers);
         s.host.private_networks_only = h->get_bool("private_networks_only").value_or(s.host.private_networks_only);
         s.host.ip_whitelist = h->get_strings("ip_whitelist");
         s.host.receive_folder = h->get_string("receive_folder").value_or("");
@@ -222,6 +231,9 @@ AppSettings settings_from_toml(std::string_view text) {
         s.client.relative_mouse = c->get_bool("relative_mouse").value_or(s.client.relative_mouse);
         s.client.show_stats = c->get_bool("show_stats").value_or(s.client.show_stats);
         s.client.show_graphs = c->get_bool("show_graphs").value_or(false);
+        s.client.keep_decoder_awake = c->get_bool("keep_decoder_awake").value_or(true);
+        s.client.microphone = c->get_bool("microphone").value_or(false);
+        s.client.echo_cancel = c->get_bool("echo_cancel").value_or(true);
         s.client.simulate_loss_percent = clamp_u32(c->get_int("simulate_loss_percent").value_or(0), 0, 50);
         s.client.toolbar_collapsed = c->get_bool("toolbar_collapsed").value_or(false);
         s.client.toolbar_tab_percent = clamp_u32(c->get_int("toolbar_tab_percent").value_or(100), 50, 300);

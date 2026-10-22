@@ -135,6 +135,10 @@ struct LocalAddress {
     std::uint32_t mask = 0;
     std::array<std::uint8_t, 6> mac{};  // Para Wake-on-LAN.
 };
+// Wake-on-LAN: "paquete mágico" (6 × 0xFF + 16 × la MAC) por broadcast a los puertos 9 y 7 de todas las redes
+// locales (y directo a `last_ip` si se conoce). false si la MAC no es válida.
+bool wake_on_lan(const std::string& mac, std::uint32_t last_ip = 0);
+
 // IPv4 de los adaptadores activos (excluye loopback), primero los que tienen puerta de enlace.
 [[nodiscard]] std::vector<LocalAddress> local_addresses();
 

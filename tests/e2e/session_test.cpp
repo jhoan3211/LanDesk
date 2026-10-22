@@ -10,6 +10,7 @@
 #include <random>
 
 #include "lancast/client/client_session.hpp"
+#include "lancast/core/bitrate.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/host/host_service.hpp"
@@ -439,5 +440,289 @@ TEST_F(EndToEnd, ReconnectsWhenHostIpChanged) {
     }
     EXPECT_TRUE(updated) << "Debe guardar la IP nueva";
     again.disconnect();
+    host.stop();
+}
+
+// Calidad máxima (resolución nativa, 50 % más bitrate, codificador rápido) frente a lo normal: cuánto cambia la
+// latencia del host y de la red. Solo informa (depende del codificador del equipo).
+TEST_F(EndToEnd, QualityPresetLatency) {
+    const AppSettings host_settings = make_settings("Host-Calidad", root_ / L"host-recv-q");
+    const AppSettings client_settings = make_settings("Cliente-Calidad", root_ / L"client-recv-q");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Calidad"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    const auto info = *client.host_info();
+    const auto& mon = info.monitors.front();
+
+    auto measure = [&](const char* label, proto::StreamConfig cfg) {
+        client.request_stream(cfg);
+        Sleep(800);
+        const std::uint64_t start = gpu::now_us();
+        std::uint64_t next_key = start;
+        while (gpu::now_us() < start + 2'500'000) {
+            if (gpu::now_us() >= next_key) {  // Cuadros completos de vez en cuando (el escritorio quieto da cuadros mínimos).
+                client.request_keyframe();
+                next_key += 250'000;
+            }
+            WaitForSingleObject(client.frame_event(), 20);
+            for (auto& f : client.take_frames()) client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+        }
+        double enc = 0, net = 0, big_net = 0;
+        int n = 0, big = 0;
+        for (const auto& fs : client.frame_history()) {
+            if (fs.time_us < start) continue;
+            enc += fs.encode_ms;
+            net += fs.network_ms;
+            ++n;
+            if (fs.keyframe) {
+                big_net += fs.network_ms;
+                ++big;
+            }
+        }
+        const auto st = client.stream();
+        std::printf("  %-16s %ux%u%s %s %u Mbps · host %.2f ms · red %.2f ms (keyframes %.2f ms) · %d cuadros\n", label,
+                    st ? st->width : 0, st ? st->height : 0, st && st->chroma_444 ? " 4:4:4" : "", st ? std::string{to_string(st->codec)}.c_str() : "",
+                    st ? st->bitrate_kbps / 1000 : 0, n ? enc / n : 0.0, n ? net / n : 0.0, big ? big_net / big : 0.0, n);
+        return n ? enc / n : 0.0;
+    };
+
+    proto::StreamConfig normal = make_config();
+    normal.monitor_id = mon.id;
+    normal.max_width = 1920;
+    normal.max_height = 1080;
+    normal.fps = 60;
+    normal.chroma_444 = false;
+    normal.hdr = false;
+    normal.auto_bitrate = true;
+    proto::StreamConfig quality = normal;
+    quality.max_width = static_cast<std::uint32_t>(mon.rect.width);
+    quality.max_height = static_cast<std::uint32_t>(mon.rect.height);
+    quality.chroma_444 = false;
+    quality.auto_bitrate = false;
+    quality.bitrate_kbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(quality.max_width, quality.max_height, 60, Codec::Hevc) * 3 / 2, 40, 400) * 1000;
+    const double a = measure("Normal", normal);
+    const double b = measure("Calidad máxima", quality);
+    proto::StreamConfig with444 = quality;
+    with444.chroma_444 = true;
+    with444.bitrate_kbps = std::clamp<std::uint32_t>(auto_bitrate_mbps(quality.max_width, quality.max_height * 2, 60, Codec::Hevc), 50, 400) * 1000;
+    measure("+ 4:4:4", with444);
+    std::printf("  Diferencia en el host: %+.2f ms por cuadro\n", b - a);
+    EXPECT_GT(b, 0.0);
+    client.disconnect();
+    host.stop();
+}
+
+// FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+// Puerto ocupado al arrancar (la instancia anterior todavía se está cerrando): el host reintenta y escucha
+// en cuanto se libera.
+TEST_F(EndToEnd, HostRetriesWhenPortBusy) {
+    auto busy = net::TcpListener::bind(kPort);
+    ASSERT_TRUE(busy.has_value());
+    host::HostService host;
+    host.start(make_settings("Host-Puerto", root_ / L"host-recv-port"));
+    Sleep(700);
+    EXPECT_FALSE(host.status().listening);
+    busy->close();
+    EXPECT_TRUE(wait_for([&] { return host.status().listening; }, 3000)) << host.status().error;
+    EXPECT_TRUE(host.status().error.empty());
+    host.stop();
+}
+
+// Espectadores: mientras A controla, B entra a solo ver, recibe el mismo video y se va cuando A termina.
+TEST_F(EndToEnd, SpectatorWatchesWhileAnotherControls) {
+    const AppSettings host_settings = make_settings("Host-Esp", root_ / L"host-recv-esp");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    auto pair = [&](client::ClientSession& c, const char* name) {
+        c.connect({0x7F000001, kPort}, make_caps(name), make_config());
+        if (!wait_for([&] { return c.state() == client::State::NeedPin; }, 5000)) return false;
+        if (!wait_for([&] { return host.status().pin.has_value(); }, 2000)) return false;
+        c.submit_pin(*host.status().pin);
+        return wait_for([&] { return c.state() == client::State::Connected && c.stream() && c.host_info(); }, 8000);
+    };
+    client::ClientSession a(make_settings("Controla", root_ / L"a-recv-esp"));
+    ASSERT_TRUE(pair(a, "Controla")) << a.message();
+    EXPECT_FALSE(a.host_info()->spectator);
+    EXPECT_TRUE(a.host_info()->input_allowed);
+
+    client::ClientSession b(make_settings("Mira", root_ / L"b-recv-esp"));
+    ASSERT_TRUE(pair(b, "Mira")) << b.message();
+    EXPECT_TRUE(b.host_info()->spectator);
+    EXPECT_FALSE(b.host_info()->input_allowed) << "El espectador no controla";
+    EXPECT_FALSE(b.host_info()->mic_available) << "El espectador no habla";
+    EXPECT_EQ(b.host_info()->controller_name, "Controla");
+    EXPECT_EQ(b.stream()->epoch, a.stream()->epoch) << "Ve el mismo stream";
+    ASSERT_EQ(host.status().viewers.size(), 1u);
+
+    // Los dos reciben cuadros (el video se codifica una vez y se copia).
+    int frames_a = 0;
+    int frames_b = 0;
+    bool key_b = false;
+    const std::uint64_t until = gpu::now_us() + 4'000'000;
+    while (gpu::now_us() < until && (frames_a < 10 || frames_b < 10 || !key_b)) {
+        WaitForSingleObject(b.frame_event(), 20);
+        for (auto& f : a.take_frames()) {
+            a.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+            ++frames_a;
+        }
+        for (auto& f : b.take_frames()) {
+            b.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+            key_b = key_b || f.frame.info.keyframe;
+            ++frames_b;
+        }
+        if (frames_b == 0) b.request_keyframe();
+    }
+    std::printf("  Controla: %d cuadros · espectador: %d cuadros\n", frames_a, frames_b);
+    EXPECT_GE(frames_a, 10);
+    EXPECT_GE(frames_b, 10);
+    EXPECT_TRUE(key_b) << "El espectador recibe un keyframe para empezar";
+
+    // Cuando quien controla se va, el espectador también.
+    a.disconnect();
+    EXPECT_TRUE(wait_for([&] { return b.state() == client::State::Closed; }, 4000)) << b.message();
+    EXPECT_TRUE(wait_for([&] { return host.status().viewers.empty(); }, 3000));
+    b.disconnect();
+    host.stop();
+}
+
+// Micrófono: el host lo ofrece solo con un cable de audio virtual, y el cliente solo lo enciende si el host lo ofrece.
+TEST_F(EndToEnd, MicrophoneOnlyWhenHostHasVirtualCable) {
+    const bool cable = audio::virtual_mic_device().has_value();
+    const AppSettings host_settings = make_settings("Host-Mic", root_ / L"host-recv-mic");
+    const AppSettings client_settings = make_settings("Cliente-Mic", root_ / L"client-recv-mic");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.set_microphone(true);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Mic"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    EXPECT_EQ(client.host_info()->mic_available, cable);
+    if (cable) {
+        EXPECT_TRUE(wait_for([&] { return client.microphone_active(); }, 3000));
+        client.set_microphone(false);
+        EXPECT_TRUE(wait_for([&] { return !client.microphone_active(); }, 3000));
+    } else {
+        Sleep(1500);
+        EXPECT_FALSE(client.microphone_active()) << "Sin cable virtual en el host no se envía el micrófono";
+    }
+    client.disconnect();
+    host.stop();
+}
+
+TEST_F(EndToEnd, AutoFecFollowsLoss) {
+    const AppSettings host_settings = make_settings("Host-FEC", root_ / L"host-recv-fec");
+    const AppSettings client_settings = make_settings("Cliente-FEC", root_ / L"client-recv-fec");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    client::ClientSession client(client_settings);
+    client.set_auto_fec(true);
+    proto::StreamConfig cfg = make_config();
+    cfg.max_width = 1280;
+    cfg.max_height = 720;
+    cfg.fps = 60;
+    cfg.chroma_444 = false;
+    cfg.hdr = false;
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-FEC"), cfg);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.stream(); }, 5000)) << client.message();
+    EXPECT_EQ(client.current_fec(), 10) << "Arranca en 10 %";
+
+    // Consume cuadros y mide el mayor hueco entre cuadros completos.
+    std::uint64_t last_frame = 0;
+    std::uint64_t worst_gap = 0;
+    std::uint64_t next_key = 0;
+    int last_fec = 0;
+    std::uint64_t fec_change_us = 0;
+    auto pump = [&](int ms) {
+        const std::uint64_t until = gpu::now_us() + static_cast<std::uint64_t>(ms) * 1000;
+        while (gpu::now_us() < until) {
+            // Cuadros grandes cada 100 ms: más paquetes (las pérdidas se notan) y video aunque la pantalla esté quieta
+            // (sin cambios el host no manda cuadros, y eso no es un corte).
+            if (gpu::now_us() >= next_key) {
+                client.request_keyframe();
+                next_key = gpu::now_us() + 100'000;
+            }
+            WaitForSingleObject(client.frame_event(), 20);
+            if (client.current_fec() != last_fec) {
+                last_fec = client.current_fec();
+                fec_change_us = gpu::now_us();
+            }
+            for (auto& f : client.take_frames()) {
+                client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
+                const std::uint64_t now = gpu::now_us();
+                if (last_frame != 0 && now - last_frame > 150'000) {
+                    // Para entender un corte: ¿coincide con un cambio de FEC? ¿llegó un keyframe después?
+                    std::printf("  [corte] %.0f ms sin cuadros, %.0f ms después del último cambio de FEC (%d %%), %s, "
+                                "perdidos %llu, reparados %llu\n",
+                                static_cast<double>(now - last_frame) / 1000.0,
+                                static_cast<double>(static_cast<std::int64_t>(last_frame - fec_change_us)) / 1000.0, last_fec,
+                                f.frame.info.keyframe ? "llegó un keyframe" : "llegó un cuadro normal",
+                                static_cast<unsigned long long>(client.stats().frames_lost),
+                                static_cast<unsigned long long>(client.stats().frames_recovered));
+                }
+                if (last_frame != 0) worst_gap = std::max(worst_gap, now - last_frame);
+                last_frame = now;
+            }
+        }
+    };
+    pump(1500);
+    client.set_simulated_loss(5);
+    const std::uint64_t t0 = gpu::now_us();
+    // La pérdida se mide en ventanas de 250 ms: la primera subida puede quedar corta (p. ej. 17 %) y las siguientes
+    // la completan.
+    while (client.current_fec() < 20 && gpu::now_us() - t0 < 5'000'000) pump(100);
+    const int raised = client.current_fec();
+    std::printf("  Con 5 %% de pérdida simulada el FEC subió a %d %% en %.1f s\n", raised, static_cast<double>(gpu::now_us() - t0) / 1e6);
+    EXPECT_GE(raised, 20);
+    client.set_simulated_loss(0);
+    pump(1000);
+    worst_gap = 0;
+    const int before_down = client.current_fec();
+    // 15 s sin pérdidas: baja un escalón (margen por si el primer tramo arrancó con algún tropiezo).
+    const std::uint64_t t1 = gpu::now_us();
+    while (client.current_fec() >= before_down && gpu::now_us() - t1 < 35'000'000) pump(500);
+    std::printf("  Sin pérdidas: %d %% -> %d %%; mayor hueco entre cuadros %.0f ms\n", before_down, client.current_fec(),
+                static_cast<double>(worst_gap) / 1000.0);
+    EXPECT_LT(client.current_fec(), before_down) << "Sin pérdidas el FEC debe bajar";
+    EXPECT_LT(worst_gap, 300'000u) << "Cambiar el FEC no debe cortar la imagen";
+    client.disconnect();
+    host.stop();
+}
+
+// Calibración: el host mide su codificador al arrancar (sin sesión) y lo informa en HostInfo.
+TEST_F(EndToEnd, HostReportsEncoderCalibration) {
+    const AppSettings host_settings = make_settings("Host-Calib", root_ / L"host-recv-cal");
+    const AppSettings client_settings = make_settings("Cliente-Calib", root_ / L"client-recv-cal");
+    host::HostService host;
+    host.start(host_settings);
+    ASSERT_TRUE(wait_for([&] { return host.status().listening; }, 2000)) << host.status().error;
+    ASSERT_TRUE(wait_for([&] { return host.status().encode_420_ms > 0; }, 20000)) << "El host no midió su codificador";
+    const auto st = host.status();
+    std::printf("  Host: codificador a %ux%u: %.2f ms (4:4:4 %.2f ms)\n", st.calibrated_size.width, st.calibrated_size.height,
+                st.encode_420_ms, st.encode_444_ms);
+    client::ClientSession client(client_settings);
+    client.connect({0x7F000001, kPort}, make_caps("Cliente-Calib"), make_config());
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::NeedPin; }, 5000)) << client.message();
+    ASSERT_TRUE(wait_for([&] { return host.status().pin.has_value(); }, 2000));
+    client.submit_pin(*host.status().pin);
+    ASSERT_TRUE(wait_for([&] { return client.state() == client::State::Connected && client.host_info(); }, 5000)) << client.message();
+    const auto info = *client.host_info();
+    EXPECT_NEAR(info.encode_420_cms / 100.0, st.encode_420_ms, 0.02);
+    EXPECT_NEAR(info.encode_444_cms / 100.0, st.encode_444_ms, 0.02);
+    client.disconnect();
     host.stop();
 }

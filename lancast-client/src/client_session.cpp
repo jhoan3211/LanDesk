@@ -3,9 +3,11 @@
 #include <windows.h>
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <random>
 
+#include "lancast/core/audio_resample.hpp"
 #include "lancast/core/encoding.hpp"
 #include "lancast/core/log.hpp"
 #include "lancast/platform/crypto.hpp"
@@ -121,7 +123,16 @@ void ClientSession::connect(const net::Endpoint& host, const proto::ClientCaps& 
         stats_ = Stats{};
         best_rtt_us_ = 1e12;
     }
-    control_ = std::thread([this, host, caps, initial] { control_thread(host, caps, initial); });
+    proto::StreamConfig first = initial;
+    {
+        std::scoped_lock lock(mutex_);
+        if (auto_fec_ && first.stream_index == 0) first.fec_percent = static_cast<std::uint8_t>(fec_current_.load());
+        last_config_ = first;
+        fec_pending_.reset();
+        fec_clean_since_us_ = 0;
+        fec_trouble_count_ = 0;
+    }
+    control_ = std::thread([this, host, caps, first] { control_thread(host, caps, first); });
 }
 
 void ClientSession::submit_pin(const std::string& pin) {
@@ -224,7 +235,65 @@ void ClientSession::send_message(const std::vector<std::uint8_t>& encoded) {
 }
 
 void ClientSession::request_stream(const proto::StreamConfig& config) {
-    send_message(proto::encode(proto::MsgType::StreamConfig, config));
+    proto::StreamConfig c = config;
+    if (c.stream_index == 0) {
+        std::scoped_lock lock(mutex_);
+        if (auto_fec_) c.fec_percent = static_cast<std::uint8_t>(fec_current_.load());
+        last_config_ = c;
+    }
+    send_message(proto::encode(proto::MsgType::StreamConfig, c));
+}
+
+// MAC del host (Wake-on-LAN) guardada con su emparejamiento.
+void ClientSession::remember_mac() {
+    std::string id;
+    std::array<std::uint8_t, 6> mac{};
+    {
+        std::scoped_lock lock(mutex_);
+        if (!host_info_) return;
+        mac = host_info_->mac;
+        id = host_id_;
+    }
+    if (id.empty() || std::ranges::all_of(mac, [](std::uint8_t b) { return b == 0; })) return;
+    const std::string text = std::format("{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    auto paired = sys::load_paired();
+    for (auto& d : paired) {
+        if (d.role == "host" && d.id_hex == id && d.mac != text) {
+            d.mac = text;
+            sys::save_paired(paired);
+            return;
+        }
+    }
+}
+
+void ClientSession::auto_fec_tick(const NetSample& s, std::uint64_t now) {
+    if (!auto_fec_ || !last_config_) return;
+    const int cur = fec_current_.load();
+    int next = cur;
+    const bool trouble = s.loss_pct > 0.3f || s.frames_lost > 0 || s.fec_recovered > 0;
+    if (fec_clean_since_us_ == 0) fec_clean_since_us_ = now;
+    if (trouble) {
+        // Con pérdidas: sube enseguida (el triple de lo que se pierde, mínimo 10 %; +10 si ya no alcanzó).
+        ++fec_trouble_count_;
+        const int target = std::clamp(static_cast<int>(std::ceil(s.loss_pct * 3.0f)) + 10, 10, 40);
+        next = std::min(40, std::max(target, cur + (s.frames_lost > 0 ? 10 : 0)));
+        if (next > cur) {
+            fec_clean_since_us_ = now;
+            fec_trouble_count_ = 0;
+        }
+    } else if (now - fec_clean_since_us_ > 15'000'000) {
+        // 15 s sin pérdidas (o con un solo tropiezo aislado, p. ej. un paquete reordenado): baja de a 5 %. Por cable
+        // queda en 5 %: menos paquetes y cuadros que salen antes.
+        if (fec_trouble_count_ <= 1 && cur > 5) next = std::max(5, cur - 5);
+        fec_clean_since_us_ = now;
+        fec_trouble_count_ = 0;
+    }
+    if (next == cur) return;
+    fec_current_ = next;
+    last_config_->fec_percent = static_cast<std::uint8_t>(next);
+    fec_pending_ = last_config_;
+    log::info("FEC automático: {} % -> {} % (pérdida {:.1f} %, cuadros perdidos {}, reparados {})", cur, next, s.loss_pct,
+              s.frames_lost, s.fec_recovered);
 }
 
 void ClientSession::request_keyframe(int index) { request_recovery(proto::RecoveryReason::NeedKeyframe, index); }
@@ -290,6 +359,10 @@ bool ClientSession::handshake(net::TcpStream& stream, const net::Endpoint& host)
     }
 
     const std::string host_id = to_hex(ack->device_id);
+    {
+        std::scoped_lock lock(mutex_);
+        host_id_ = host_id;
+    }
     auto paired = sys::load_paired();
     const auto known = std::ranges::find_if(paired, [&](const sys::PairedDevice& d) { return d.role == "host" && d.id_hex == host_id; });
     const bool use_pairing = ack->has_pairing && known != paired.end();
@@ -444,6 +517,7 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                         host_info_ = std::move(*h);
                     }
                     if (first) media_ = std::thread([this] { media_thread(); });
+                    remember_mac();
                 }
                 break;
             case proto::MsgType::StreamStarted:
@@ -470,8 +544,12 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                     std::scoped_lock lock(mutex_);
                     player_format_ = fmt;
                     message_ = s->notes;
+                    // Mismo stream (cambió solo el bitrate, el FEC o el audio): la imagen sigue sin esperar un keyframe.
+                    const auto& old = slots_[0].info;
+                    const bool same = old && old->epoch == s->epoch && old->codec == s->codec && old->width == s->width &&
+                                      old->height == s->height && old->chroma_444 == s->chroma_444 && old->hdr == s->hdr;
                     slots_[0].info = std::move(*s);
-                    slots_[0].waiting_keyframe = true;
+                    if (!same) slots_[0].waiting_keyframe = true;
                 }
                 break;
             case proto::MsgType::StreamError:
@@ -505,6 +583,13 @@ void ClientSession::control_thread(net::Endpoint host, proto::ClientCaps caps, p
                 if (auto c = proto::CursorPos::read(r)) {
                     std::scoped_lock lock(mutex_);
                     slots_[c->stream_index > 1 ? 0 : c->stream_index].cursor = *c;
+                }
+                break;
+            case proto::MsgType::GamepadRumble:
+                if (auto g = proto::GamepadRumble::read(r)) {
+                    std::scoped_lock lock(mutex_);
+                    std::erase_if(rumble_, [&](const proto::GamepadRumble& x) { return x.index == g->index; });
+                    rumble_.push_back(*g);
                 }
                 break;
             case proto::MsgType::Clipboard:
@@ -563,6 +648,8 @@ void ClientSession::media_thread() {
         host_media = net::Endpoint{host_.ip, media_port_};
         rx_key = media_rx_key_;
         tx_key = media_tx_key_;
+        window_loss_ = media::LossMeter{};  // Conexión nueva: el host numera desde 1.
+        fine_loss_ = media::LossMeter{};
     }
     net::DatagramCipher rx(rx_key);
     net::DatagramCipher tx(tx_key);
@@ -574,15 +661,108 @@ void ClientSession::media_thread() {
     std::uint64_t last_ping = 0;
     std::mt19937 rng{std::random_device{}()};
 
+    // Envío cifrado al host: desde este hilo y desde el del micrófono.
+    std::mutex tx_mutex;
+    auto seal_send = [&](media::PacketType type, std::span<const std::uint8_t> body) {
+        std::scoped_lock lock(tx_mutex);
+        std::uint8_t header[media::kPacketHeaderSize];
+        media::PacketHeader{type, tx_seq++}.write(header);
+        if (tx.seal(header, body, sealed)) sock->send_to(host_media, sealed);
+    };
+    // Micrófono: mono, en trozos de hasta 10 ms, mismo formato que el audio del host.
+    // Cancelación de eco: lo que el reproductor entrega a los parlantes (el audio del host) es la referencia que se
+    // resta del micrófono, para que no vuelva al host. A la frecuencia del micrófono.
+    std::mutex aec_mutex;
+    std::shared_ptr<audio::EchoCanceller> aec;
+    audio::Resampler aec_resampler;
+    std::vector<std::int16_t> aec_stereo;
+    std::vector<std::int16_t> aec_ref;
+    player_.set_tap([&](std::span<const std::int16_t> pcm, const audio::Format& fmt) {
+        std::shared_ptr<audio::EchoCanceller> a;
+        {
+            std::scoped_lock lock(aec_mutex);
+            a = aec;
+        }
+        if (!a || fmt.channels == 0) return;
+        std::span<const std::int16_t> stereo = pcm;
+        if (fmt.channels == 1) {  // El resampler espera estéreo.
+            aec_stereo.resize(pcm.size() * 2);
+            for (std::size_t i = 0; i < pcm.size(); ++i) aec_stereo[2 * i] = aec_stereo[2 * i + 1] = pcm[i];
+            stereo = aec_stereo;
+        }
+        aec_resampler.configure(fmt.sample_rate, a->rate(), 1);
+        aec_resampler.process(stereo, aec_ref);
+        a->playback(aec_ref);
+    });
+    struct TapGuard {
+        audio::Player& player;
+        ~TapGuard() { player.set_tap({}); }
+    } tap_guard{player_};
+
+    audio::LoopbackCapture mic;
+    std::uint32_t mic_seq = 0;
+    std::vector<std::int16_t> mono;
+    std::vector<std::int16_t> cleaned;
+    auto on_mic = [&](std::span<const std::int16_t> pcm, std::uint32_t frames, const audio::Format& fmt) {
+        mono.resize(frames);
+        for (std::uint32_t f = 0; f < frames; ++f) {
+            mono[f] = static_cast<std::int16_t>((static_cast<int>(pcm[2 * f]) + pcm[2 * f + 1]) / 2);
+        }
+        const bool use_aec = echo_cancel_ && !mic.echo_cancellation();
+        {
+            std::scoped_lock lock(aec_mutex);
+            if (use_aec && (!aec || aec->rate() != fmt.sample_rate)) {
+                aec = std::make_shared<audio::EchoCanceller>(fmt.sample_rate);
+                log::info("Micrófono: cancelación de eco de LanCast a {} Hz", fmt.sample_rate);
+            } else if (!use_aec && aec) {
+                aec.reset();
+            }
+        }
+        echo_cancel_active_ = use_aec || mic.echo_cancellation();
+        if (use_aec) {
+            std::shared_ptr<audio::EchoCanceller> a;
+            {
+                std::scoped_lock lock(aec_mutex);
+                a = aec;
+            }
+            cleaned.clear();
+            a->capture(mono, cleaned);
+            mono.swap(cleaned);
+            frames = static_cast<std::uint32_t>(mono.size());
+        }
+        const std::uint32_t chunk = std::max<std::uint32_t>(fmt.sample_rate / 100, 1);
+        const std::uint64_t now = gpu::now_us();
+        for (std::uint32_t off = 0; off < frames; off += chunk) {
+            const std::uint32_t n = std::min(chunk, frames - off);
+            ByteWriter w(32 + n * 2);
+            w.u32(++mic_seq).u64(now).u32(fmt.sample_rate).u8(1).u16(static_cast<std::uint16_t>(n));
+            w.raw({reinterpret_cast<const std::uint8_t*>(mono.data() + off), static_cast<std::size_t>(n) * 2});
+            seal_send(media::PacketType::Mic, w.data());
+        }
+    };
+
+    std::optional<proto::StreamConfig> fec_send;
     while (!stopping_) {
         const std::uint64_t now = gpu::now_us();
         if (now - last_hello > 500'000) {
             // Registra/renueva el endpoint UDP en el host (atraviesa el firewall del cliente: es tráfico saliente).
-            std::uint8_t header[media::kPacketHeaderSize];
-            media::PacketHeader{media::PacketType::ClientHello, tx_seq++}.write(header);
             const std::uint8_t hello_body[1] = {1};
-            if (tx.seal(header, hello_body, sealed)) sock->send_to(host_media, sealed);
+            seal_send(media::PacketType::ClientHello, hello_body);
             last_hello = now;
+            bool want_mic = false;
+            if (microphone_) {
+                std::scoped_lock lock(mutex_);
+                want_mic = host_info_ && host_info_->mic_available;
+            }
+            if (want_mic != mic_active_) {
+                if (want_mic) {
+                    mic.start(on_mic, audio::LoopbackCapture::Source::Microphone);
+                } else {
+                    mic.stop();
+                }
+                mic_active_ = want_mic;
+                log::info("Micrófono hacia el host: {}", want_mic ? "activado" : "apagado");
+            }
         }
         if (now - last_ping > 1'000'000) {
             send_message(proto::encode(proto::MsgType::Ping, proto::PingPong{gpu::now_us(), 0}));
@@ -608,21 +788,29 @@ void ClientSession::media_thread() {
         if (*n == 0 || from.ip != host_media.ip) continue;
         const auto header = media::PacketHeader::read({buf.data(), *n});
         if (!header || !rx.open({buf.data(), *n}, payload)) continue;
+        // Pérdida simulada (pruebas): como una real, el paquete ni se cuenta.
+        if (header->type == media::PacketType::Video && simulated_loss_ > 0 &&
+            std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) {
+            continue;
+        }
 
         {
             std::scoped_lock lock(mutex_);
+            window_loss_.received(header->seq);
+            fine_loss_.received(header->seq);
             ++window_packets_;
             window_bytes_ += *n;
-            window_min_seq_ = std::min(window_min_seq_, header->seq);
-            window_max_seq_ = std::max(window_max_seq_, header->seq);
             ++fine_packets_;
             fine_bytes_ += *n;
-            fine_min_seq_ = std::min(fine_min_seq_, header->seq);
-            fine_max_seq_ = std::max(fine_max_seq_, header->seq);
             tick_history(gpu::now_us());
+            fec_send = std::move(fec_pending_);
+            fec_pending_.reset();
+        }
+        if (fec_send) {
+            send_message(proto::encode(proto::MsgType::StreamConfig, *fec_send));
+            fec_send.reset();
         }
         if (header->type == media::PacketType::Video) {
-            if (simulated_loss_ > 0 && std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) continue;
             handle_video(payload);
             // Vigilante: siguen llegando paquetes de video pero hace >250 ms que ningún frame se completa
             // (p. ej. se perdió el keyframe). Con la pantalla quieta el host casi no envía y eso es normal.
@@ -643,6 +831,8 @@ void ClientSession::media_thread() {
             handle_audio(payload);
         }
     }
+    mic.stop();
+    mic_active_ = false;
 }
 
 void ClientSession::handle_video(std::span<const std::uint8_t> payload) {
@@ -734,6 +924,11 @@ proto::CursorPos ClientSession::cursor(int index) const {
     return slots_[static_cast<std::size_t>(index)].cursor;
 }
 
+std::vector<proto::GamepadRumble> ClientSession::take_rumble() {
+    std::scoped_lock lock(mutex_);
+    return std::exchange(rumble_, {});
+}
+
 std::optional<std::string> ClientSession::take_clipboard() {
     std::scoped_lock lock(mutex_);
     auto out = std::move(clipboard_);
@@ -751,10 +946,7 @@ void ClientSession::tick_history(std::uint64_t now) {
     NetSample s;
     s.time_us = now;
     s.mbps = static_cast<float>(static_cast<double>(fine_bytes_) * 8.0 / secs / 1e6);
-    if (fine_max_seq_ >= fine_min_seq_ && fine_packets_ > 0) {
-        const double expected = static_cast<double>(fine_max_seq_ - fine_min_seq_ + 1);
-        s.loss_pct = static_cast<float>(std::max(0.0, (expected - static_cast<double>(fine_packets_)) * 100.0 / expected));
-    }
+    s.loss_pct = static_cast<float>(fine_loss_.take().percent());
     s.fec_recovered = static_cast<std::uint32_t>(stats_.frames_recovered - std::min(fine_last_recovered_, stats_.frames_recovered));
     s.frames_lost = static_cast<std::uint32_t>(stats_.frames_lost - std::min(fine_last_lost_, stats_.frames_lost));
     s.keyframe_requests = static_cast<std::uint32_t>(stats_.keyframe_requests - std::min(fine_last_idr_, stats_.keyframe_requests));
@@ -765,12 +957,11 @@ void ClientSession::tick_history(std::uint64_t now) {
     fine_last_idr_ = stats_.keyframe_requests;
     net_history_.push_back(s);
     while (net_history_.size() > 48) net_history_.pop_front();  // 12 s
+    auto_fec_tick(s, now);
     fine_start_us_ = now;
     fine_bytes_ = 0;
     fine_packets_ = 0;
     fine_presented_ = 0;
-    fine_min_seq_ = ~0ull;
-    fine_max_seq_ = 0;
 }
 
 std::vector<FrameSample> ClientSession::frame_history() const {
@@ -822,18 +1013,11 @@ Stats ClientSession::stats() const {
     if (secs >= 1.0) {
         stats_.fps = self.window_presented_ / secs;
         stats_.bitrate_mbps = self.window_bytes_ * 8.0 / secs / 1e6;
-        if (self.window_max_seq_ >= self.window_min_seq_ && self.window_packets_ > 0) {
-            const double expected = static_cast<double>(self.window_max_seq_ - self.window_min_seq_ + 1);
-            stats_.packet_loss_pct = std::max(0.0, (expected - static_cast<double>(self.window_packets_)) * 100.0 / expected);
-        } else {
-            stats_.packet_loss_pct = 0;
-        }
+        stats_.packet_loss_pct = self.window_loss_.take().percent();
         self.stats_window_us_ = now;
         self.window_presented_ = 0;
         self.window_bytes_ = 0;
         self.window_packets_ = 0;
-        self.window_min_seq_ = ~0ull;
-        self.window_max_seq_ = 0;
     }
     stats_.audio_buffer_ms = self.player_.buffered_ms();
     return stats_;

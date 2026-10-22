@@ -42,6 +42,7 @@ struct StreamSettings {
     std::uint32_t audio_volume = 100;     // 0..100, se aplica en el cliente.
     std::uint32_t audio_buffer_ms = 20;   // Colchón de reproducción del cliente (menos = menor latencia).
     std::uint32_t fec_percent = 15;
+    bool fec_auto = true;  // La paridad se ajusta sola según las pérdidas (5 % por cable sin pérdidas).
     bool low_latency = true;  // Codificador en preset rápido y búfer de 1 frame (menos calidad por bit).
     // Recuperar pérdidas con intra-refresh en vez de keyframes. Apagado por defecto: medido con los
     // decodificadores de Windows, un keyframe recupera antes (descartan cuadros durante la ola de refresco).
@@ -68,6 +69,8 @@ struct HostSettings {
     bool allow_clipboard = true;
     bool allow_files = true;
     bool allow_audio = true;
+    bool allow_viewers = true;  // Mientras alguien controla, otros pueden conectarse a solo ver (espectadores).
+    bool allow_microphone = true;  // Recibir el micrófono del cliente (necesita un cable de audio virtual).
     bool private_networks_only = true;
     std::vector<std::string> ip_whitelist;  // Vacía = cualquier IP privada.
     std::string receive_folder;             // Vacío = Descargas\LanCast.
@@ -89,6 +92,9 @@ struct ClientSettings {
     bool relative_mouse = false;
     bool show_stats = false;
     bool show_graphs = false;  // Gráficos en tiempo real (latencia, bitrate, pérdidas, FPS, RTT).
+    bool microphone = false;  // Enviar el micrófono de este equipo al host.
+    bool echo_cancel = true;  // Restar del micrófono el audio del host que suena por los parlantes.
+    bool keep_decoder_awake = true;  // Mantener despierta la unidad de video de la GPU (menos latencia, algo más de consumo).
     std::uint32_t simulate_loss_percent = 0;  // Solo para pruebas.
     // Barra superior del stream: oculta = solo un ícono pequeño arriba al centro; tamaño de esa pestaña en %.
     bool toolbar_collapsed = false;

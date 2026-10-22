@@ -30,6 +30,7 @@ enum class PacketType : std::uint8_t {
     Video = 1,
     Audio = 2,
     ClientHello = 3,  // Cliente -> host: registra el endpoint UDP y lo mantiene vivo.
+    Mic = 4,          // Cliente -> host: micrófono del cliente (mismo formato que Audio); 1.9+.
 };
 
 struct PacketHeader {

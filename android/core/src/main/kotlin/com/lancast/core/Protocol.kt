@@ -40,6 +40,7 @@ object MsgType {
     const val SECURE_ATTENTION = 34
     const val TEXT = 35
     const val GAMEPAD = 36
+    const val GAMEPAD_RUMBLE = 37
     const val FILE_HELLO = 40
     const val FILE_OFFER = 41
     const val FILE_ACCEPT = 42
@@ -149,6 +150,9 @@ data class HostInfo(
     val mac: ByteArray = ByteArray(6),       // 1.7+: MAC del PC para Wake-on-LAN (ceros = no se sabe).
     val gamepadAvailable: Boolean = false,   // 1.7+: el PC tiene el driver de mandos virtuales (ViGEmBus).
     val platform: Int = 0,                   // 1.8+: 0 = Windows, 1 = Android (teléfono compartiendo su pantalla).
+    val micAvailable: Boolean = false,       // 1.9+: el PC recibe el micrófono del cliente (cable de audio virtual).
+    val spectator: Boolean = false,          // 1.9+: este teléfono solo mira; otro equipo tiene el control.
+    val controllerName: String = "",         // 1.9+: quién controla (para un espectador).
 ) {
     val hasMac: Boolean get() = mac.any { it.toInt() != 0 }
 
@@ -182,7 +186,19 @@ data class HostInfo(
                 gamepad = r.bool()
             }
             val platform = if (r.ok && r.remaining >= 1) r.u8() else 0
-            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad, platform)
+            if (r.ok && r.remaining >= 4) {  // 1.9+: calibración del codificador (no se usa en el teléfono).
+                r.u16()
+                r.u16()
+            }
+            val mic = r.ok && r.remaining >= 1 && r.bool()
+            var spectator = false
+            var controller = ""
+            if (r.ok && r.remaining >= 1) {
+                spectator = r.bool()
+                controller = r.str(256)
+            }
+            return if (r.ok) HostInfo(name, monitors, encoders, audio, input, clipboard, files, mediaPort, filePort, secure, mac, gamepad,
+                platform, mic, spectator, controller)
             else null
         }
     }
@@ -339,6 +355,16 @@ data class GamepadState(
         const val B = 0x2000
         const val X = 0x4000
         const val Y = 0x8000
+    }
+}
+
+// Vibración que pide el juego en el PC (motores 0..255; los dos en 0 = parar). Host -> cliente, 1.9+.
+data class GamepadRumble(val index: Int, val strong: Int, val weak: Int) {
+    companion object {
+        fun read(r: ByteReader): GamepadRumble? {
+            val g = GamepadRumble(r.u8(), r.u8(), r.u8())
+            return if (r.ok && g.index < 4) g else null
+        }
     }
 }
 

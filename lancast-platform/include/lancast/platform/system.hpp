@@ -29,6 +29,7 @@ struct PairedDevice {
     std::string last_address;
     std::vector<std::uint8_t> secret;  // 32 bytes
     std::string role;                  // "host" (equipos a los que me conecto) o "client" (equipos que me controlan)
+    std::string mac;                   // "aa:bb:cc:dd:ee:ff" del host (para despertarlo con Wake-on-LAN); vacío si no se sabe.
 };
 [[nodiscard]] std::vector<PairedDevice> load_paired();
 void save_paired(const std::vector<PairedDevice>& devices);

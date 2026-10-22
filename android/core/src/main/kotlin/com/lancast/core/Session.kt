@@ -59,6 +59,7 @@ interface SessionListener {
     fun onCursorPos(pos: CursorPos) {}
     fun onCursorShape(shape: CursorShape) {}
     fun onClipboard(text: String) {}
+    fun onRumble(rumble: GamepadRumble) {}
     fun onMessage(text: String) {}
     fun onClosed(reason: String, retryable: Boolean) {}
 }
@@ -134,8 +135,86 @@ class Session(
     private var clockOffsetUs = 0L  // reloj del host - reloj local (por ping)
     private var hasClock = false
 
+    // FEC automático: la paridad se ajusta según las pérdidas (sin pérdidas baja hasta 5 %, con pérdidas sube hasta
+    // 40 %). Cambiarla no reinicia el codificador del host ni corta la imagen.
+    @Volatile var autoFec = true
+    @Volatile var currentFec = 10
+        private set
+    @Volatile private var lastConfig: StreamConfig? = null
+    private var fecCleanSinceUs = 0L
+    private var fecTroubles = 0  // Muestras con pérdidas desde fecCleanSinceUs.
+
+    private fun withFec(config: StreamConfig): StreamConfig {
+        val c = if (autoFec) config.copy(fecPercent = currentFec) else config
+        lastConfig = c
+        return c
+    }
+
     fun connect(host: String, port: Int, caps: ClientCaps, config: StreamConfig) {
-        controlThread = Thread({ controlLoop(host, port, caps, config) }, "lancast-control").apply { start() }
+        val first = withFec(config)
+        controlThread = Thread({ controlLoop(host, port, caps, first) }, "lancast-control").apply { start() }
+    }
+
+    // Una ventana de 250 ms: pérdida de paquetes (%), cuadros perdidos y cuadros reparados con la paridad.
+    // Envío cifrado por UDP al host (desde el hilo de medios y desde el del micrófono).
+    private val txLock = Any()
+    private var mediaTx: AesGcm? = null
+    private var mediaTarget: Pair<java.net.InetAddress, Int>? = null
+    private var txSeq = 1L
+    private var micSeq = 0L
+
+    private fun sendMedia(type: Int, body: ByteArray) {
+        val datagram = synchronized(txLock) {
+            val tx = mediaTx ?: return
+            val header = packetHeader(type, txSeq++)
+            header + tx.encrypt(header, header, body)
+        }
+        val (host, port) = mediaTarget ?: return
+        try {
+            mediaSocket?.send(DatagramPacket(datagram, datagram.size, host, port))
+        } catch (_: Exception) {
+        }
+    }
+
+    // Micrófono de este teléfono hacia el PC (PCM de 16 bits mono). Solo si el host lo acepta (hostInfo.micAvailable).
+    fun sendMic(pcm: ShortArray, frames: Int, sampleRate: Int) {
+        if (hostInfo?.micAvailable != true) return
+        val chunk = maxOf(sampleRate / 100, 1)
+        var off = 0
+        while (off < frames) {
+            val n = minOf(chunk, frames - off)
+            val w = ByteWriter().u32(++micSeq and 0xFFFFFFFFL).u64(nowUs()).u32(sampleRate.toLong()).u8(1).u16(n)
+            for (i in off until off + n) w.u16(pcm[i].toInt() and 0xFFFF)
+            sendMedia(MediaConst.TYPE_MIC, w.toByteArray())
+            off += n
+        }
+    }
+
+    private fun autoFecTick(lossPct: Double, lost: Int, recovered: Int, now: Long) {
+        val cfg = lastConfig ?: return
+        if (!autoFec) return
+        val cur = currentFec
+        var next = cur
+        if (fecCleanSinceUs == 0L) fecCleanSinceUs = now
+        if (lossPct > 0.3 || lost > 0 || recovered > 0) {
+            fecTroubles++
+            val target = (Math.ceil(lossPct * 3).toInt() + 10).coerceIn(10, 40)
+            next = minOf(40, maxOf(target, cur + if (lost > 0) 10 else 0))
+            if (next > cur) {
+                fecCleanSinceUs = now
+                fecTroubles = 0
+            }
+        } else if (now - fecCleanSinceUs > 15_000_000) {
+            // 15 s sin pérdidas (o con un solo tropiezo aislado): baja de a 5 %.
+            if (fecTroubles <= 1 && cur > 5) next = maxOf(5, cur - 5)
+            fecCleanSinceUs = now
+            fecTroubles = 0
+        }
+        if (next == cur) return
+        currentFec = next
+        val c = cfg.copy(fecPercent = next)
+        lastConfig = c
+        send(c.encode())
     }
 
     fun submitPin(value: String) {
@@ -174,7 +253,7 @@ class Session(
         mediaSocket?.close()
     }
 
-    fun requestStream(config: StreamConfig) = send(config.encode())
+    fun requestStream(config: StreamConfig) = send(withFec(config).encode())
 
     // Últimos 30 s en ventanas de 250 ms (copia).
     fun history(): List<StatSample> = synchronized(history) { history.toList() }
@@ -353,8 +432,11 @@ class Session(
             }
             MsgType.STREAM_STARTED -> StreamStarted.read(r)?.let { s ->
                 if (s.streamIndex != 0) return
+                // Mismo stream (cambió solo el bitrate, el FEC o el audio): la imagen sigue sin esperar un keyframe.
+                val old = stream
+                val same = old != null && old.epoch == s.epoch && old.codec == s.codec && old.width == s.width && old.height == s.height
                 stream = s
-                waitingKeyframe = true
+                if (!same) waitingKeyframe = true
                 listener.onStreamStarted(s)
             }
             MsgType.STREAM_ERROR -> listener.onMessage(r.str(4096))
@@ -373,6 +455,7 @@ class Session(
             MsgType.CURSOR_POS -> CursorPos.read(r)?.let { if (it.streamIndex == 0) listener.onCursorPos(it) }
             MsgType.CURSOR_SHAPE -> CursorShape.read(r)?.let { listener.onCursorShape(it) }
             MsgType.CLIPBOARD -> listener.onClipboard(r.str())
+            MsgType.GAMEPAD_RUMBLE -> GamepadRumble.read(r)?.let { listener.onRumble(it) }
             MsgType.DISCONNECT -> {
                 if (!stopping.getAndSet(true)) listener.onClosed("El host cerró la sesión", false)
                 try {
@@ -395,8 +478,10 @@ class Session(
         sock.soTimeout = 20
         val host = hostAddress ?: return
         val rx = AesGcm(mediaRxKey)
-        val tx = AesGcm(mediaTxKey)
-        var txSeq = 1L
+        synchronized(txLock) {
+            mediaTx = AesGcm(mediaTxKey)
+            mediaTarget = host to mediaPort
+        }
         val buf = ByteArray(2048)
         val packet = DatagramPacket(buf, buf.size)
         var lastHello = 0L
@@ -413,18 +498,14 @@ class Session(
         var gNetMaxUs = 0L
         var gLost = assembler.framesLost
         var gRecovered = assembler.framesRecovered
+        // Pérdida por la secuencia (común a video y audio), tolerante al desorden.
+        val loss = LossMeter()
 
         while (!stopping.get()) {
             val now = nowUs()
             if (now - lastHello > 500_000) {
                 // Registra/renueva el endpoint UDP en el host (tráfico saliente: atraviesa el firewall del celular).
-                val header = packetHeader(MediaConst.TYPE_CLIENT_HELLO, txSeq++)
-                val sealed = tx.encrypt(header, header, byteArrayOf(1))
-                val datagram = header + sealed
-                try {
-                    sock.send(DatagramPacket(datagram, datagram.size, host, mediaPort))
-                } catch (_: Exception) {
-                }
+                sendMedia(MediaConst.TYPE_CLIENT_HELLO, byteArrayOf(1))
                 lastHello = now
             }
             if (now - lastPing > 1_000_000) {
@@ -462,8 +543,11 @@ class Session(
                 gBytes = 0
                 gNetUs = 0
                 gNetMaxUs = 0
+                val lossPct = loss.takePercent()
+                autoFecTick(lossPct, sample.lost, sample.recovered, now)
                 gLost = assembler.framesLost
                 gRecovered = assembler.framesRecovered
+
             }
 
             try {
@@ -481,6 +565,9 @@ class Session(
             gBytes += n
             val header = buf.copyOf(MediaConst.PACKET_HEADER_SIZE)
             val payload = rx.decrypt(header, header, buf, MediaConst.PACKET_HEADER_SIZE, n - MediaConst.PACKET_HEADER_SIZE) ?: continue
+            var seq = 0L
+            for (i in 0 until 8) seq = seq or ((header[4 + i].toLong() and 0xFF) shl (8 * i))
+            loss.received(seq)
             when (header[0].toInt()) {
                 MediaConst.TYPE_VIDEO -> {
                     val frame = handleVideo(payload)

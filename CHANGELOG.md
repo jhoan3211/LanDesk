@@ -3,6 +3,27 @@
 Cada versión publicada toma sus notas de la sección correspondiente de este archivo
 (`.github/workflows/release.yml`). El SHA-256 de `LanCast.exe` se agrega solo al publicar; el de `LanCast.apk` ("SHA-256 de LanCast.apk: …") se agrega al subir el APK (la app lo exige para actualizarse).
 
+## 1.9.0
+
+### Menos latencia
+- **Decodificación el doble de rápida en el cliente de PC.** Algunas GPU (sobre todo las integradas de AMD) apagan su unidad de video entre cuadro y cuadro, y cada cuadro pagaba el despertar. LanCast la mantiene ocupada con un cuadro diminuto cada 3 ms en un dispositivo aparte. Medido a 1440p: HEVC baja de ~10 a ~5 ms por cuadro y H.264 de ~14 a ~6,5 ms. *Ajustes → Decodificación → Mantener despierta la unidad de video* (activado; gasta un poco más de energía).
+- **FEC automático** (PC y Android): la paridad baja sola hasta 5 % por cable sin pérdidas (menos paquetes, los cuadros salen antes) y sube enseguida, hasta 40 %, si aparecen pérdidas (Wi-Fi). Cambiarlo no corta la imagen.
+- **Calibración del codificador**: la primera vez, el host mide su codificador en segundo plano (~2 s, una vez por tarjeta y driver). Con eso, **Calidad máxima** decide sola si conviene sumar 4:4:4 (solo si cuesta 3 ms o menos de más).
+
+### Funciones nuevas
+- **Espectadores**: mientras alguien controla, hasta 4 equipos más pueden conectarse a **solo ver** (presentaciones, soporte). Reciben el mismo video y audio (se codifica una sola vez), no controlan, no hablan y no cambian la calidad. Se van cuando termina la sesión principal. En el host: *Permitir espectadores* (activado), la lista de quién mira y *Desconectar espectadores*.
+- **Micrófono del cliente al host** (PC y Android): botón *Micrófono* en la barra del stream. En el host llega como un micrófono más ("CABLE Output") para Discord, Teams o un juego; requiere el cable de audio virtual gratuito **VB-Cable** en el host (vb-audio.com/Cable) y la opción *Recibir el micrófono del cliente*. Sin eco: el cliente de PC resta del micrófono el sonido del host que sale por sus parlantes (SpeexDSP; con un eco fuerte simulado lo baja 28 dB) y Android usa la cancelación del sistema. El host no lo usa si el cable está como salida predeterminada (habría eco). En **solo ver** no se habla.
+- **Vibración del mando**: la vibración que pide el juego en el host llega al mando del cliente (PC: el mando de Xbox; Android: el mando conectado, o el teléfono con el mando en pantalla).
+- **Despertar un PC desde otro PC** (Wake-on-LAN): *Conectar → Equipos emparejados que no responden → Despertar*.
+- **Archivo de diagnóstico** para soporte: *Diagnóstico → Crear archivo para soporte* deja en el escritorio un .txt con la versión, el equipo, el estado del host y de la sesión, estadísticas y registro (sin contraseñas ni claves). En Android: *Enviar diagnóstico (si algo falla)*.
+
+### Correcciones
+- **El FEC automático subía sin pérdidas**, sobre todo con sonido en el PC: el host numera cada paquete al prepararlo y envía el video en tandas, así que un paquete de audio llega antes que video con número menor y eso se contaba como pérdida. En Android era peor: se contaban solo los paquetes de video pero la numeración incluye el audio, así que cualquier sonido parecía pérdida. Ahora un paquete se da por perdido solo si ya llegaron 64 posteriores sin él (PC y Android).
+- **El host reintenta abrir sus puertos** durante 15 s si están ocupados al arrancar (por ejemplo, la instancia anterior todavía se está cerrando tras una actualización), en vez de quedarse sin escuchar.
+
+### Compatibilidad
+- Los campos nuevos del protocolo son opcionales: un cliente 1.8 se conecta a un host 1.9 y al revés (sin las funciones nuevas).
+
 ## 1.8.0
 
 ### Controlar un teléfono (desde un PC o desde otro teléfono)
@@ -14,6 +35,8 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 - **Cliente Android con un teléfono**: usa el toque directo (se toca donde se quiere tocar en el otro teléfono).
 
 ### PC
+- **Botón «Calidad máxima»** (junto a «Latencia mínima», en la barra y en el menú): resolución nativa del host (sin escalar) y 50 % más bitrate, con el codificador rápido. Medido en una GPU AMD integrada: 2560x1440 a 127 Mbps cuesta ~2,6 ms más por cuadro que 1080p. El 4:4:4 no se activa solo porque ahí costaba ~7,7 ms más: queda como opción aparte para trabajar con mucho texto.
+- Medición por etapa de la latencia del host (`LANCAST_BENCH=1`, *Bench.HostLatencyBreakdown*): la conversión de color tarda 0,6–1,7 ms y el resto es el codificador por hardware, que crece con los píxeles codificados (el 4:4:4 empaquetado codifica el doble).
 - **La barra superior del stream se acomoda al ancho**: en una fila si cabe y, si no (por ejemplo en una pantalla de 1280x720 o en una ventana angosta), en dos o más filas, sin cortar ni esconder ningún control.
 
 ### Si el router cambia la IP (DHCP)

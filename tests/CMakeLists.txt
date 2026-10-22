@@ -1,6 +1,6 @@
 include(FetchContent)
 
-# GoogleTest fijado a una versión exacta. gtest_force_shared_crt alinea el runtime con el resto del proyecto.
+# GoogleTest fijado a una versi?n exacta. gtest_force_shared_crt alinea el runtime con el resto del proyecto.
 set(gtest_force_shared_crt OFF CACHE BOOL "" FORCE)
 set(INSTALL_GTEST OFF CACHE BOOL "" FORCE)
 FetchContent_Declare(googletest
@@ -26,7 +26,7 @@ target_link_libraries(lancast-core-tests PRIVATE lancast::core GTest::gtest_main
 lancast_set_warnings(lancast-core-tests)
 gtest_discover_tests(lancast-core-tests)
 
-# Pruebas contra el hardware real de la máquina (requieren al menos una GPU y un monitor).
+# Pruebas contra el hardware real de la m?quina (requieren al menos una GPU y un monitor).
 add_executable(lancast-platform-tests
     platform/enumeration_test.cpp
     platform/pipeline_test.cpp
@@ -35,6 +35,9 @@ add_executable(lancast-platform-tests
     platform/present_test.cpp
     platform/encode_bench.cpp
     platform/gamepad_test.cpp
+    platform/calibration_test.cpp
+    platform/audio_test.cpp
+    platform/upscale_bench.cpp
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)
 target_link_libraries(lancast-platform-tests PRIVATE lancast::platform GTest::gtest_main d3d11 dxgi winmm)
 lancast_set_warnings(lancast-platform-tests)
@@ -48,7 +51,7 @@ target_link_libraries(lancast-e2e-tests PRIVATE lancast::host lancast::client GT
 lancast_set_warnings(lancast-e2e-tests)
 gtest_discover_tests(lancast-e2e-tests PROPERTIES LABELS hardware DISCOVERY_TIMEOUT 30)
 
-# Cliente real (el del PC) para las pruebas del host del teléfono (android/core, Kotlin/JVM).
+# Cliente real (el del PC) para las pruebas del host del tel?fono (android/core, Kotlin/JVM).
 add_executable(lancast-test-client
     interop/test_client.cpp
     ${PROJECT_SOURCE_DIR}/cmake/lancast.manifest)

@@ -7,6 +7,7 @@
 
 #include <array>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 #include "lancast/core/protocol.hpp"
@@ -28,6 +29,9 @@ public:
     // Crea el mando `state.index` la primera vez; `connected = false` lo quita.
     void update(const proto::GamepadState& state);
     void remove_all();
+    // Vibración que pide el juego (desde un hilo del driver): índice, motor grande, motor pequeño.
+    using RumbleCallback = std::function<void(std::uint8_t, std::uint8_t, std::uint8_t)>;
+    void set_rumble_callback(RumbleCallback cb);
 
 private:
     struct Impl;
