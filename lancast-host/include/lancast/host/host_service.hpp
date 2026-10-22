@@ -29,6 +29,12 @@ struct StreamStats {
     std::uint64_t frames = 0;
     std::uint64_t keyframes = 0;
     double skipped_percent = 0;  // Cuadros no enviados porque el codificador seguía ocupado.
+    // Picos del último segundo (los promedios los esconden): el cuadro más lento y sus partes.
+    double capture_to_encoded_max_ms = 0;
+    double capture_wait_max_ms = 0;
+    double encode_max_ms = 0;
+    std::uint32_t keyframes_last_second = 0;
+    bool slowest_was_keyframe = false;
 };
 
 struct Status {

@@ -408,9 +408,19 @@ void Streamer::run() {
             ++stats_.frames;
             if (info.keyframe) ++stats_.keyframes;
             ++window_frames_;
-            window_latency_ms_ += info.encode_time_us / 1000.0;
-            window_wait_ms_ += static_cast<double>(f.encode_start_us - std::min(f.capture_us, f.encode_start_us)) / 1000.0;
-            window_encode_ms_ += static_cast<double>(encoded_us - std::min(f.encode_start_us, encoded_us)) / 1000.0;
+            const double total_ms = info.encode_time_us / 1000.0;
+            const double wait_ms = static_cast<double>(f.encode_start_us - std::min(f.capture_us, f.encode_start_us)) / 1000.0;
+            const double enc_ms = static_cast<double>(encoded_us - std::min(f.encode_start_us, encoded_us)) / 1000.0;
+            window_latency_ms_ += total_ms;
+            window_wait_ms_ += wait_ms;
+            window_encode_ms_ += enc_ms;
+            if (total_ms > window_latency_max_) {
+                window_latency_max_ = total_ms;
+                window_slowest_key_ = info.keyframe;
+            }
+            window_wait_max_ = std::max(window_wait_max_, wait_ms);
+            window_encode_max_ = std::max(window_encode_max_, enc_ms);
+            if (info.keyframe) ++window_keyframes_;
             if (encoded_us - stats_window_us_ >= 1'000'000) {
                 const double secs = static_cast<double>(encoded_us - stats_window_us_) / 1e6;
                 const double n = static_cast<double>(window_frames_);
@@ -419,6 +429,11 @@ void Streamer::run() {
                 stats_.capture_to_encoded_ms = n > 0 ? window_latency_ms_ / n : 0;
                 stats_.capture_wait_ms = n > 0 ? window_wait_ms_ / n : 0;
                 stats_.encode_ms = n > 0 ? window_encode_ms_ / n : 0;
+                stats_.capture_to_encoded_max_ms = window_latency_max_;
+                stats_.capture_wait_max_ms = window_wait_max_;
+                stats_.encode_max_ms = window_encode_max_;
+                stats_.keyframes_last_second = window_keyframes_;
+                stats_.slowest_was_keyframe = window_slowest_key_;
                 const double offered = n + static_cast<double>(window_skipped_);
                 stats_.skipped_percent = offered > 0 ? 100.0 * static_cast<double>(window_skipped_) / offered : 0;
                 // ¿Sobrecarga? El codificador tarda más que el intervalo entre cuadros, o se saltan >10 % de los cuadros.
@@ -453,6 +468,11 @@ void Streamer::run() {
                 window_latency_ms_ = 0;
                 window_wait_ms_ = 0;
                 window_encode_ms_ = 0;
+                window_latency_max_ = 0;
+                window_wait_max_ = 0;
+                window_encode_max_ = 0;
+                window_keyframes_ = 0;
+                window_slowest_key_ = false;
             }
         });
         next->config = cfg;
