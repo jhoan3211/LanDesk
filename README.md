@@ -91,6 +91,10 @@ Por defecto la resolución y los FPS son **"Igual a esta pantalla"**: el cliente
 
 *Abrir otro monitor…* (barra superior o menú) muestra otro monitor del host en una **segunda ventana**, con su propio stream en paralelo. Si el cliente tiene dos monitores, la ventana se abre a pantalla completa en el otro. Doble clic o `F11` alterna pantalla completa; el mouse funciona en las dos ventanas y el teclado va a la que esté activa.
 
+### Estadísticas en vivo (para soporte o scripts)
+
+LanCast escribe su estado en `%APPDATA%\LanCast\estadisticas.json` cada segundo (cliente y host: FPS, Mbps, tiempos por etapa, latencia real, pérdidas, FEC, codificador, cuadros saltados y los últimos 30 s) y una línea por segundo en `estadisticas.csv` mientras hay stream. Crear un archivo vacío llamado `medir-latencia` en esa carpeta hace una medición de latencia real, igual que el botón.
+
 ### Medir la latencia real
 
 *Medir latencia* hace que el host muestre un cuadrito blanco/negro en una esquina y el cliente mide cuánto tarda en verlo en su pantalla (de pantalla a pantalla, con los relojes sincronizados). Muestra la mediana de 10 muestras.

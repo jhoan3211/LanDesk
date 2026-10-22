@@ -320,6 +320,7 @@ int App::run() {
         send_mouse_position();
         poll_gamepads();
         process_client();
+        write_live_stats();
 
         // Actualización descargada y verificada: reemplazar el .exe y reiniciar.
         {

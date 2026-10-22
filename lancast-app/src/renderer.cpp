@@ -4,6 +4,23 @@
 
 namespace lancast::app {
 
+// Espera a que la GPU termine lo enviado (la decodificación). Sin costo de latencia: el dibujo del cuadro depende de
+// ella de todos modos. Como mucho 50 ms.
+void VideoRenderer::wait_gpu() {
+    if (!done_) {
+        D3D11_QUERY_DESC qd{D3D11_QUERY_EVENT, 0};
+        if (FAILED(device_.device->CreateQuery(&qd, &done_))) return;
+    }
+    device_.context->End(done_.Get());
+    device_.context->Flush();
+    const std::uint64_t deadline = gpu::now_us() + 50'000;
+    BOOL finished = FALSE;
+    while (device_.context->GetData(done_.Get(), &finished, sizeof(finished), 0) != S_OK || !finished) {
+        if (gpu::now_us() > deadline) return;
+        YieldProcessor();
+    }
+}
+
 void VideoRenderer::reset() {
     last_.reset();
     decoder_.reset();
@@ -42,6 +59,7 @@ bool VideoRenderer::decode(const client::Frame& frame, const proto::StreamStarte
 
     const std::uint64_t t0 = gpu::now_us();
     auto out = decoder_->decode(frame.frame.data, frame.frame.info.capture_time_us);
+    if (out && out->has_value()) wait_gpu();  // Hasta que la GPU termine: dibujarlo lo esperaría igual.
     decode_ms = (gpu::now_us() - t0) / 1000.0;
     if (!out) {
         error_ = out.error().message();
