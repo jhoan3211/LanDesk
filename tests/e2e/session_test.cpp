@@ -519,6 +519,21 @@ TEST_F(EndToEnd, QualityPresetLatency) {
 }
 
 // FEC automático: con pérdidas sube solo y sin ellas baja; el cambio no corta la imagen (no espera un keyframe).
+// Puerto ocupado al arrancar (la instancia anterior todavía se está cerrando): el host reintenta y escucha
+// en cuanto se libera.
+TEST_F(EndToEnd, HostRetriesWhenPortBusy) {
+    auto busy = net::TcpListener::bind(kPort);
+    ASSERT_TRUE(busy.has_value());
+    host::HostService host;
+    host.start(make_settings("Host-Puerto", root_ / L"host-recv-port"));
+    Sleep(700);
+    EXPECT_FALSE(host.status().listening);
+    busy->close();
+    EXPECT_TRUE(wait_for([&] { return host.status().listening; }, 3000)) << host.status().error;
+    EXPECT_TRUE(host.status().error.empty());
+    host.stop();
+}
+
 // Espectadores: mientras A controla, B entra a solo ver, recibe el mismo video y se va cuando A termina.
 TEST_F(EndToEnd, SpectatorWatchesWhileAnotherControls) {
     const AppSettings host_settings = make_settings("Host-Esp", root_ / L"host-recv-esp");
@@ -630,17 +645,35 @@ TEST_F(EndToEnd, AutoFecFollowsLoss) {
     std::uint64_t last_frame = 0;
     std::uint64_t worst_gap = 0;
     std::uint64_t next_key = 0;
+    int last_fec = 0;
+    std::uint64_t fec_change_us = 0;
     auto pump = [&](int ms) {
         const std::uint64_t until = gpu::now_us() + static_cast<std::uint64_t>(ms) * 1000;
         while (gpu::now_us() < until) {
-            if (gpu::now_us() >= next_key) {  // Cuadros grandes de vez en cuando: más paquetes, las pérdidas se notan.
+            // Cuadros grandes cada 100 ms: más paquetes (las pérdidas se notan) y video aunque la pantalla esté quieta
+            // (sin cambios el host no manda cuadros, y eso no es un corte).
+            if (gpu::now_us() >= next_key) {
                 client.request_keyframe();
-                next_key = gpu::now_us() + 300'000;
+                next_key = gpu::now_us() + 100'000;
             }
             WaitForSingleObject(client.frame_event(), 20);
+            if (client.current_fec() != last_fec) {
+                last_fec = client.current_fec();
+                fec_change_us = gpu::now_us();
+            }
             for (auto& f : client.take_frames()) {
                 client.report_presented(f.frame.info, f.arrival_us, 0, 0, f.frame.data.size());
                 const std::uint64_t now = gpu::now_us();
+                if (last_frame != 0 && now - last_frame > 150'000) {
+                    // Para entender un corte: ¿coincide con un cambio de FEC? ¿llegó un keyframe después?
+                    std::printf("  [corte] %.0f ms sin cuadros, %.0f ms después del último cambio de FEC (%d %%), %s, "
+                                "perdidos %llu, reparados %llu\n",
+                                static_cast<double>(now - last_frame) / 1000.0,
+                                static_cast<double>(static_cast<std::int64_t>(last_frame - fec_change_us)) / 1000.0, last_fec,
+                                f.frame.info.keyframe ? "llegó un keyframe" : "llegó un cuadro normal",
+                                static_cast<unsigned long long>(client.stats().frames_lost),
+                                static_cast<unsigned long long>(client.stats().frames_recovered));
+                }
                 if (last_frame != 0) worst_gap = std::max(worst_gap, now - last_frame);
                 last_frame = now;
             }
@@ -649,7 +682,9 @@ TEST_F(EndToEnd, AutoFecFollowsLoss) {
     pump(1500);
     client.set_simulated_loss(5);
     const std::uint64_t t0 = gpu::now_us();
-    while (client.current_fec() <= 10 && gpu::now_us() - t0 < 5'000'000) pump(100);
+    // La pérdida se mide en ventanas de 250 ms: la primera subida puede quedar corta (p. ej. 17 %) y las siguientes
+    // la completan.
+    while (client.current_fec() < 20 && gpu::now_us() - t0 < 5'000'000) pump(100);
     const int raised = client.current_fec();
     std::printf("  Con 5 %% de pérdida simulada el FEC subió a %d %% en %.1f s\n", raised, static_cast<double>(gpu::now_us() - t0) / 1e6);
     EXPECT_GE(raised, 20);

@@ -498,9 +498,8 @@ class Session(
         var gNetMaxUs = 0L
         var gLost = assembler.framesLost
         var gRecovered = assembler.framesRecovered
-        var gPackets = 0L
-        var gMinSeq = Long.MAX_VALUE
-        var gMaxSeq = Long.MIN_VALUE
+        // Pérdida por la secuencia (común a video y audio), tolerante al desorden.
+        val loss = LossMeter()
 
         while (!stopping.get()) {
             val now = nowUs()
@@ -544,14 +543,11 @@ class Session(
                 gBytes = 0
                 gNetUs = 0
                 gNetMaxUs = 0
-                val expected = if (gPackets > 0 && gMaxSeq >= gMinSeq) (gMaxSeq - gMinSeq + 1).toDouble() else 0.0
-                val lossPct = if (expected > 0) ((expected - gPackets) * 100.0 / expected).coerceAtLeast(0.0) else 0.0
+                val lossPct = loss.takePercent()
                 autoFecTick(lossPct, sample.lost, sample.recovered, now)
                 gLost = assembler.framesLost
                 gRecovered = assembler.framesRecovered
-                gPackets = 0
-                gMinSeq = Long.MAX_VALUE
-                gMaxSeq = Long.MIN_VALUE
+
             }
 
             try {
@@ -569,14 +565,11 @@ class Session(
             gBytes += n
             val header = buf.copyOf(MediaConst.PACKET_HEADER_SIZE)
             val payload = rx.decrypt(header, header, buf, MediaConst.PACKET_HEADER_SIZE, n - MediaConst.PACKET_HEADER_SIZE) ?: continue
+            var seq = 0L
+            for (i in 0 until 8) seq = seq or ((header[4 + i].toLong() and 0xFF) shl (8 * i))
+            loss.received(seq)
             when (header[0].toInt()) {
                 MediaConst.TYPE_VIDEO -> {
-                    // Secuencia del datagrama (para medir la pérdida de paquetes de video).
-                    var seq = 0L
-                    for (i in 0 until 8) seq = seq or ((header[4 + i].toLong() and 0xFF) shl (8 * i))
-                    gPackets++
-                    if (seq < gMinSeq) gMinSeq = seq
-                    if (seq > gMaxSeq) gMaxSeq = seq
                     val frame = handleVideo(payload)
                     if (frame != null) {
                         val arrival = nowUs()

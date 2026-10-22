@@ -17,6 +17,10 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 - **Despertar un PC desde otro PC** (Wake-on-LAN): *Conectar → Equipos emparejados que no responden → Despertar*.
 - **Archivo de diagnóstico** para soporte: *Diagnóstico → Crear archivo para soporte* deja en el escritorio un .txt con la versión, el equipo, el estado del host y de la sesión, estadísticas y registro (sin contraseñas ni claves). En Android: *Enviar diagnóstico (si algo falla)*.
 
+### Correcciones
+- **El FEC automático subía sin pérdidas**, sobre todo con sonido en el PC: el host numera cada paquete al prepararlo y envía el video en tandas, así que un paquete de audio llega antes que video con número menor y eso se contaba como pérdida. En Android era peor: se contaban solo los paquetes de video pero la numeración incluye el audio, así que cualquier sonido parecía pérdida. Ahora un paquete se da por perdido solo si ya llegaron 64 posteriores sin él (PC y Android).
+- **El host reintenta abrir sus puertos** durante 15 s si están ocupados al arrancar (por ejemplo, la instancia anterior todavía se está cerrando tras una actualización), en vez de quedarse sin escuchar.
+
 ### Compatibilidad
 - Los campos nuevos del protocolo son opcionales: un cliente 1.8 se conecta a un host 1.9 y al revés (sin las funciones nuevas).
 

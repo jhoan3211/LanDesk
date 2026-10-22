@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <random>
 
+#include "lancast/core/loss_meter.hpp"
 #include "lancast/core/media.hpp"
 
 using namespace lancast;
@@ -232,4 +233,46 @@ TEST(SliceJoiner, DropsFrameWithMissingSlice) {
     }
     EXPECT_EQ(delivered, 1);
     EXPECT_GE(j.take_lost() + a.take_lost(), 1u);
+}
+
+// Pérdida medida por secuencia: el desorden (audio que se adelanta a una tanda de video) no cuenta como pérdida;
+// lo que de verdad no llega, sí.
+TEST(LossMeter, ReorderIsNotLoss) {
+    LossMeter m(64);
+    // 1..1000 con tandas desordenadas: cada 20 paquetes, uno llega 10 lugares antes.
+    std::vector<std::uint64_t> order;
+    for (std::uint64_t s = 1; s <= 1000; ++s) order.push_back(s);
+    for (std::size_t i = 10; i + 10 < order.size(); i += 20) std::swap(order[i], order[i + 10]);
+    for (const auto s : order) m.received(s);
+    const auto c = m.take();
+    EXPECT_EQ(c.lost, 0u);
+    EXPECT_GE(c.expected, 900u);
+}
+
+TEST(LossMeter, CountsRealLoss) {
+    LossMeter m(64);
+    std::mt19937 rng(3);
+    std::uint64_t dropped = 0;
+    for (std::uint64_t s = 1; s <= 20'000; ++s) {
+        if (s <= 19'900 && rng() % 100 < 5) {  // 5 % (los últimos no se pueden decidir todavía)
+            ++dropped;
+            continue;
+        }
+        m.received(s);
+    }
+    const auto c = m.take();
+    EXPECT_EQ(c.lost, dropped);
+    EXPECT_NEAR(c.percent(), 5.0, 0.6);
+    EXPECT_EQ(m.take().expected, 0u) << "take() reinicia la cuenta";
+}
+
+TEST(LossMeter, LateBeyondGraceAndRestart) {
+    LossMeter m(4);
+    for (std::uint64_t s : {1, 2, 4, 5, 6, 7, 8, 3}) m.received(s);  // El 3 llega tarde: ya se contó perdido.
+    EXPECT_EQ(m.take().lost, 1u);
+    // El host vuelve a empezar desde 1 (nueva sesión): no es una pérdida enorme.
+    for (std::uint64_t s = 200'000; s < 200'010; ++s) m.received(s);
+    m.take();
+    for (std::uint64_t s = 1; s <= 20; ++s) m.received(s);
+    EXPECT_EQ(m.take().lost, 0u);
 }

@@ -103,6 +103,8 @@ struct HostService::Impl {
     std::thread media_thread;
     std::thread discovery_thread;
     std::thread calibration_thread;
+    std::thread retry_thread;  // Reintenta abrir los puertos si estaban ocupados al arrancar.
+    std::atomic<bool> retry_cancel{false};
     std::atomic<bool> calibration_cancel{false};
     int calibration_failures = 0;
     bool calibrating = false;                     // Protegido por mutex.
@@ -159,15 +161,30 @@ struct HostService::Impl {
                                                                    : std::filesystem::path{platform_path(s.host.receive_folder)});
         owner.files_.set_overwrite(s.host.overwrite_existing);
         if (!s.host.enabled) return;
+        if (try_listen(s)) return;
+        // Puerto ocupado: casi siempre es la instancia anterior que todavía se está cerrando (reinicio o
+        // actualización). Se reintenta en segundo plano unos segundos antes de darse por vencido.
+        retry_cancel = false;
+        retry_thread = std::thread([this, s] {
+            for (int i = 0; i < 30 && !retry_cancel; ++i) {
+                Sleep(500);
+                if (retry_cancel) return;
+                if (try_listen(s)) return;
+            }
+            std::scoped_lock lock(mutex);
+            log::error("Host: {}", error);
+        });
+    }
 
+    // Abre los puertos y arranca los hilos. false si algún puerto está ocupado (queda el motivo en `error`).
+    bool try_listen(const AppSettings& s) {
         auto ctl = net::TcpListener::bind(s.host.control_port);
         auto fil = net::TcpListener::bind(static_cast<std::uint16_t>(s.host.control_port + 1));
         auto med = net::UdpSocket::bind(s.host.media_port);
         if (!ctl || !fil || !med) {
             std::scoped_lock lock(mutex);
             error = !ctl ? ctl.error().message() : !fil ? fil.error().message() : med.error().message();
-            log::error("Host: {}", error);
-            return;
+            return false;
         }
         control_listener = std::move(*ctl);
         file_listener = std::move(*fil);
@@ -188,9 +205,11 @@ struct HostService::Impl {
 
 
         std::scoped_lock lock(mutex);
+        error.clear();
         listening = true;
         log::info("Host escuchando en TCP {} (control), {} (archivos), UDP {} (medios)", s.host.control_port,
                   s.host.control_port + 1, s.host.media_port);
+        return true;
     }
 
     static std::wstring platform_path(const std::string& utf8) {
@@ -201,6 +220,8 @@ struct HostService::Impl {
     }
 
     void stop() {
+        retry_cancel = true;
+        if (retry_thread.joinable()) retry_thread.join();
         running = false;
         pairing_cancelled = true;
         if (auto s = current()) s->channel->shutdown();

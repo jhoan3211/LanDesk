@@ -648,6 +648,8 @@ void ClientSession::media_thread() {
         host_media = net::Endpoint{host_.ip, media_port_};
         rx_key = media_rx_key_;
         tx_key = media_tx_key_;
+        window_loss_ = media::LossMeter{};  // Conexión nueva: el host numera desde 1.
+        fine_loss_ = media::LossMeter{};
     }
     net::DatagramCipher rx(rx_key);
     net::DatagramCipher tx(tx_key);
@@ -786,17 +788,20 @@ void ClientSession::media_thread() {
         if (*n == 0 || from.ip != host_media.ip) continue;
         const auto header = media::PacketHeader::read({buf.data(), *n});
         if (!header || !rx.open({buf.data(), *n}, payload)) continue;
+        // Pérdida simulada (pruebas): como una real, el paquete ni se cuenta.
+        if (header->type == media::PacketType::Video && simulated_loss_ > 0 &&
+            std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) {
+            continue;
+        }
 
         {
             std::scoped_lock lock(mutex_);
+            window_loss_.received(header->seq);
+            fine_loss_.received(header->seq);
             ++window_packets_;
             window_bytes_ += *n;
-            window_min_seq_ = std::min(window_min_seq_, header->seq);
-            window_max_seq_ = std::max(window_max_seq_, header->seq);
             ++fine_packets_;
             fine_bytes_ += *n;
-            fine_min_seq_ = std::min(fine_min_seq_, header->seq);
-            fine_max_seq_ = std::max(fine_max_seq_, header->seq);
             tick_history(gpu::now_us());
             fec_send = std::move(fec_pending_);
             fec_pending_.reset();
@@ -806,7 +811,6 @@ void ClientSession::media_thread() {
             fec_send.reset();
         }
         if (header->type == media::PacketType::Video) {
-            if (simulated_loss_ > 0 && std::uniform_int_distribution<std::uint32_t>(0, 99)(rng) < simulated_loss_) continue;
             handle_video(payload);
             // Vigilante: siguen llegando paquetes de video pero hace >250 ms que ningún frame se completa
             // (p. ej. se perdió el keyframe). Con la pantalla quieta el host casi no envía y eso es normal.
@@ -942,10 +946,7 @@ void ClientSession::tick_history(std::uint64_t now) {
     NetSample s;
     s.time_us = now;
     s.mbps = static_cast<float>(static_cast<double>(fine_bytes_) * 8.0 / secs / 1e6);
-    if (fine_max_seq_ >= fine_min_seq_ && fine_packets_ > 0) {
-        const double expected = static_cast<double>(fine_max_seq_ - fine_min_seq_ + 1);
-        s.loss_pct = static_cast<float>(std::max(0.0, (expected - static_cast<double>(fine_packets_)) * 100.0 / expected));
-    }
+    s.loss_pct = static_cast<float>(fine_loss_.take().percent());
     s.fec_recovered = static_cast<std::uint32_t>(stats_.frames_recovered - std::min(fine_last_recovered_, stats_.frames_recovered));
     s.frames_lost = static_cast<std::uint32_t>(stats_.frames_lost - std::min(fine_last_lost_, stats_.frames_lost));
     s.keyframe_requests = static_cast<std::uint32_t>(stats_.keyframe_requests - std::min(fine_last_idr_, stats_.keyframe_requests));
@@ -961,8 +962,6 @@ void ClientSession::tick_history(std::uint64_t now) {
     fine_bytes_ = 0;
     fine_packets_ = 0;
     fine_presented_ = 0;
-    fine_min_seq_ = ~0ull;
-    fine_max_seq_ = 0;
 }
 
 std::vector<FrameSample> ClientSession::frame_history() const {
@@ -1014,18 +1013,11 @@ Stats ClientSession::stats() const {
     if (secs >= 1.0) {
         stats_.fps = self.window_presented_ / secs;
         stats_.bitrate_mbps = self.window_bytes_ * 8.0 / secs / 1e6;
-        if (self.window_max_seq_ >= self.window_min_seq_ && self.window_packets_ > 0) {
-            const double expected = static_cast<double>(self.window_max_seq_ - self.window_min_seq_ + 1);
-            stats_.packet_loss_pct = std::max(0.0, (expected - static_cast<double>(self.window_packets_)) * 100.0 / expected);
-        } else {
-            stats_.packet_loss_pct = 0;
-        }
+        stats_.packet_loss_pct = self.window_loss_.take().percent();
         self.stats_window_us_ = now;
         self.window_presented_ = 0;
         self.window_bytes_ = 0;
         self.window_packets_ = 0;
-        self.window_min_seq_ = ~0ull;
-        self.window_max_seq_ = 0;
     }
     stats_.audio_buffer_ms = self.player_.buffered_ms();
     return stats_;

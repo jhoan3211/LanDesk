@@ -18,6 +18,7 @@
 #include "lancast/core/media.hpp"
 #include "lancast/core/protocol.hpp"
 #include "lancast/core/settings.hpp"
+#include "lancast/core/loss_meter.hpp"
 #include "lancast/platform/audio.hpp"
 #include "lancast/platform/files.hpp"
 #include "lancast/platform/net.hpp"
@@ -236,8 +237,9 @@ private:
     std::uint64_t window_presented_ = 0;
     std::uint64_t window_bytes_ = 0;
     std::uint64_t window_packets_ = 0;
-    std::uint64_t window_min_seq_ = ~0ull;
-    std::uint64_t window_max_seq_ = 0;
+    // Pérdida por secuencia, tolerante al desorden (audio que se adelanta a una tanda de video): para las
+    // estadísticas de 1 s y para las ventanas de 250 ms (gráficos y FEC automático).
+    media::LossMeter window_loss_;
 
     // Historial fino (gráficos): ventanas de 250 ms.
     std::deque<FrameSample> frame_history_;
@@ -246,8 +248,7 @@ private:
     std::uint64_t fine_bytes_ = 0;
     std::uint64_t fine_packets_ = 0;
     std::uint64_t fine_presented_ = 0;
-    std::uint64_t fine_min_seq_ = ~0ull;
-    std::uint64_t fine_max_seq_ = 0;
+    media::LossMeter fine_loss_;
     std::uint64_t fine_last_recovered_ = 0;
     std::uint64_t fine_last_lost_ = 0;
     std::uint64_t fine_last_idr_ = 0;
