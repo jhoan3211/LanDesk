@@ -6,6 +6,7 @@ Cada versión publicada toma sus notas de la sección correspondiente de este ar
 ## 1.9.1
 
 - **Estadísticas en vivo en archivos**, para revisar una sesión sin tocar la pantalla (soporte o scripts): `%APPDATA%\LanCast\estadisticas.json` se reescribe cada segundo con todo el estado del cliente (FPS, Mbps, tiempos del host, red, decodificación y presentación, latencia real, pérdida, FEC, cuadros reparados) y del host (codificador, FPS enviados, espera de captura, cuadros saltados, espectadores), más los últimos 30 s; `estadisticas.csv` guarda una línea por segundo mientras hay stream. Crear el archivo vacío `medir-latencia` en esa carpeta hace la medición de latencia real, como el botón.
+  Con el host instalado como servicio, su estado está en `C:\ProgramData\LanCast-estadisticas\estadisticas-host.json`.
 - **La decodificación de las estadísticas es la real**: hasta que la GPU termina el cuadro (antes medía solo la entrega, 0,1–0,5 ms; el real ronda 5 ms a 1440p en una GPU integrada).
 - Las propiedades del .exe (clic derecho → Detalles) muestran la versión correcta (decían 1.2.0).
 
